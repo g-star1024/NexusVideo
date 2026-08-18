@@ -206,21 +206,15 @@ jobs:
             echo "=== 最后 80 行 ==="
             tail -80 cargo-check.log
 
-            # 将 cargo 错误作为 GitHub annotation 写入（API 可访问）
-            while IFS= read -r line; do
-              if [[ "$line" =~ ^error\[? ]]; then
-                echo "::error::cargo: $line"
-              elif [[ "$line" =~ ^\ \ \-\-\-\> ]]; then
-                # 提取文件路径和行号
-                if [[ "$line" =~ (src/[^\ :]+):([0-9]+):([0-9]+) ]]; then
-                  filepath="${BASH_REMATCH[1]}"
-                  lineno="${BASH_REMATCH[2]}"
-                  echo "::error file=client/src-tauri/$filepath,line=$lineno::cargo location"
-                fi
-              elif [[ "$line" =~ ^\ \ \| ]]; then
-                echo "::error::cargo context: $line"
-              fi
-            done < cargo-check.log
+            # 将 cargo 错误作为 GitHub annotation 写入
+            grep -n "error\|--> " cargo-check.log | while IFS= read -r line; do
+              echo "::error::cargo: $line"
+            done
+            # 兜底：输出最后 50 行
+            echo "::error::cargo log tail follows:"
+            tail -50 cargo-check.log | while IFS= read -r line; do
+              echo "::error::cargo tail: $line"
+            done
             exit $EXIT_CODE
           fi
         timeout-minutes: 15
