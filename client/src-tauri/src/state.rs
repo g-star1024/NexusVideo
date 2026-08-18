@@ -9,6 +9,7 @@ use crate::process_manager::ProcessManager;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::time::Duration;
+use std::sync::Arc;
 use tokio::sync::{Notify, RwLock};
 
 /// 端口常量（与 backend/config.py 对齐）
@@ -23,7 +24,8 @@ pub struct AppState {
     /// 复用连接池的 HTTP 客户端（Rust → FastAPI 转发）
     pub http: Client,
     /// 子进程管理器（ComfyUI + FastAPI 生命周期）
-    pub proc_mgr: RwLock<ProcessManager>,
+    /// 用 Arc<RwLock<>> 包装以支持 tokio::spawn 内共享（'static 生命周期）
+    pub proc_mgr: Arc<RwLock<ProcessManager>>,
 
     /// 进度监听 WebSocket 任务句柄（task_id → (JoinHandle, Notify)）
     /// 用于 stop_progress 命令取消后台监听任务
@@ -40,7 +42,7 @@ impl AppState {
             .expect("HTTP client 构建失败");
         Self {
             http,
-            proc_mgr: RwLock::new(ProcessManager::new()),
+            proc_mgr: Arc::new(RwLock::new(ProcessManager::new())),
             progress_handles: RwLock::new(HashMap::new()),
         }
     }
