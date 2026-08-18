@@ -602,7 +602,7 @@ pub async fn listen_progress(
     let app_clone = app.clone();
     let cancel_clone = Arc::clone(&cancel);
     let handle = tokio::spawn(async move {
-        listen_progress_loop(ws_url, task_id_clone, app_clone, &cancel_clone).await;
+        listen_progress_loop(ws_url, task_id_clone, app_clone, cancel_clone).await;
     });
 
     // 存储句柄供 stop_progress 使用
@@ -643,7 +643,7 @@ async fn listen_progress_loop(
     ws_url: String,
     task_id: String,
     app: AppHandle,
-    cancel: &tokio::sync::Notify,
+    cancel: Arc<tokio::sync::Notify>,
 ) {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
