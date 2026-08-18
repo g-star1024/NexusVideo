@@ -47,12 +47,13 @@ impl StaticServer {
             .await
             .map_err(|e| format!("静态文件服务绑定失败 {}: {e}", addr))?;
 
+        let app_for_spawn = app.clone();
         let accept_handle = tokio::spawn(async move {
             let mut recv = listener;
             loop {
                 match recv.accept().await {
                     Ok((stream, _peer)) => {
-                        let app_clone = app.clone();
+                        let app_clone = app_for_spawn.clone();
                         tokio::spawn(async move {
                             handle_request(stream, app_clone).await;
                         });
@@ -126,7 +127,7 @@ pub async fn stop_static_server() {
 /// 处理单个 HTTP 连接
 async fn handle_request(
     mut stream: tokio::net::TcpStream,
-    _app: Option<AppHandle>,
+    _app: AppHandle,
 ) {
     let mut buf = [0u8; 8192];
     let n = match {
