@@ -206,14 +206,14 @@ jobs:
             echo "=== 最后 80 行 ==="
             tail -80 cargo-check.log
 
-            # 将 cargo 错误作为 GitHub annotation 写入
-            grep -n "error\|--> " cargo-check.log | while IFS= read -r line; do
+            # 输出 cargo 编译错误行（排除 thiserror crate 名误匹配）
+            grep -nE "^error\[|^error:|^  -->|^  \|" cargo-check.log | while IFS= read -r line; do
               echo "::error::cargo: $line"
             done
-            # 兜底：输出最后 50 行
-            echo "::error::cargo log tail follows:"
-            tail -50 cargo-check.log | while IFS= read -r line; do
-              echo "::error::cargo tail: $line"
+            # 兜底：全量输出最后 80 行
+            echo "::error::=== CARGO LOG TAIL (last 80 lines) ==="
+            tail -80 cargo-check.log | while IFS= read -r line; do
+              echo "::error::cargo: $line"
             done
             exit $EXIT_CODE
           fi
