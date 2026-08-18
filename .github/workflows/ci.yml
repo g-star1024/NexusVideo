@@ -1,0 +1,446 @@
+name: NexusVideo CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============ 1. Python 后端验证 ============
+  python-lint:
+    name: Python 语法与依赖检查
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "backend/requirements.txt"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: 验证 Python 语法（ast.parse）
+        run: |
+          python -c "
+          import ast, sys, pathlib
+          errors = []
+          for py in sorted(pathlib.Path('backend').rglob('*.py')):
+              try:
+                  ast.parse(py.read_text())
+                  print(f'  ✅ {py}')
+              except SyntaxError as e:
+                  errors.append(f'  ❌ {py}: {e}')
+          if errors:
+              print('\n'.join(errors))
+              sys.exit(1)
+          print(f'\n全部 {len(list(pathlib.Path(\"backend\").rglob(\"*.py\")))} 个文件通过')
+          "
+
+      - name: 验证 JSON 工作流模板
+        run: |
+          python -c "
+          import json, pathlib, sys
+          errors = []
+          for wf in sorted(pathlib.Path('workflows').rglob('*.json')):
+              try:
+                  data = json.loads(wf.read_text())
+                  nodes = data.get('nodes', [])
+                  print(f'  ✅ {wf.name}: {len(nodes)} nodes')
+              except json.JSONDecodeError as e:
+                  errors.append(f'  ❌ {wf}: {e}')
+          if errors:
+              print('\n'.join(errors))
+              sys.exit(1)
+          print('\n全部工作流 JSON 验证通过')
+          "
+
+      - name: 验证 FastAPI 路由导入
+        run: |
+          cd backend
+          python -c "
+          import sys, importlib
+          modules = [
+              'core.auth', 'core.comfyui_client', 'core.comfyui_ws',
+              'core.inference_router', 'core.progress_translator',
+              'core.task_manager', 'core.user_db', 'core.workflow_translator',
+              'routers.auth', 'routers.cloud_forward', 'routers.generate',
+              'routers.progress', 'routers.system', 'routers.task', 'routers.upload',
+              'config', 'exceptions', 'local_server'
+          ]
+          for m in modules:
+              try:
+                  importlib.import_module(m)
+                  print(f'  ✅ {m}')
+              except Exception as e:
+                  print(f'  ❌ {m}: {e}')
+                  sys.exit(1)
+          print(f'\n全部 {len(modules)} 个模块导入成功')
+          "
+
+  # ============ 2. Rust / Tauri 编译验证 ============
+  rust-lint:
+    name: Rust 编译验证
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: 安装 Tauri 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential
+
+      - name: 编译 Rust 代码（不含 Tauri 打包）
+        run: |
+          cd client/src-tauri
+          cargo check --workspace
+        timeout-minutes: 15
+
+  # ============ 3. TypeScript / Vue 检查 ============
+  frontend-check:
+    name: TypeScript 类型检查
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-directory: client/node_modules
+
+      - name: Install frontend dependencies
+        run: |
+          cd client
+          npm ci
+        timeout-minutes: 10
+
+      - name: TypeScript 类型检查
+        run: |
+          cd client
+          npx vue-tsc --noEmit
+        timeout-minutes: 5
+
+  # ============ 4. 集成测试 ============
+  integration-test:
+    name: 端到端集成测试
+    runs-on: ubuntu-22.04
+    needs: [python-lint, rust-lint, frontend-check]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装后端依赖
+        run: |
+          pip install -r backend/requirements.txt
+
+      - name: 创建集成测试脚本
+        run: |
+          cat > integration_test.py << 'PYEOF'
+          import sys, time, json, threading
+          sys.path.insert(0, 'backend')
+
+          from config import Config
+          from local_server import app
+
+          # 使用 FastAPI TestClient（模拟 HTTP 请求，无需 ComfyUI）
+          from fastapi.testclient import TestClient
+          client = TestClient(app)
+
+          results = {"passed": 0, "failed": 0, "details": []}
+
+          def check(name, ok, msg=""):
+              status = "PASS" if ok else "FAIL"
+              results["passed" if ok else "failed"] += 1
+              results["details"].append(f"  [{status}] {name}" + (f" — {msg}" if msg else ""))
+              print(f"  [{status}] {name}")
+              if not ok:
+                  print(f"         {msg}")
+
+          print("=" * 60)
+          print("NexusVideo 端到端集成测试")
+          print("=" * 60)
+
+          # ---- 1. 健康检查 ----
+          print("\n📡 1. 健康检查")
+          r = client.get("/health")
+          check("GET /health", r.status_code == 200,
+                f"status={r.status_code} body={r.json()}")
+
+          # ---- 2. 无 Token 访问生成接口（预期 401） ----
+          print("\n🔐 2. 认证中间件")
+          r = client.post("/generate", json={})
+          check("未认证请求被拒绝", r.status_code == 401,
+                f"status={r.status_code}")
+
+          # ---- 3. 注册 + 登录 ----
+          print("\n📝 3. 用户注册 + 登录")
+          reg = client.post("/api/v1/auth/register", json={
+              "username": "testuser", "password": "test123",
+              "phone": "13800138000", "nickname": "测试用户"
+          })
+          check("注册成功", reg.status_code == 200,
+                f"status={reg.status_code}")
+          if reg.status_code == 200:
+              print(f"         {reg.json()}")
+
+          login = client.post("/api/v1/auth/login", json={
+              "username": "testuser", "password": "test123"
+          })
+          check("登录成功", login.status_code == 200,
+                f"status={login.status_code}")
+          token = None
+          if login.status_code == 200:
+              data = login.json()
+              token = data.get("token") or data.get("access_token")
+              check("获取到 JWT Token", token is not None)
+
+          # ---- 4. Token 鉴权 ----
+          print("\n🔑 4. Token 鉴权")
+          if token:
+              r = client.get("/task/list", headers={"Authorization": f"Bearer {token}"})
+              check("已认证请求通过", r.status_code == 200,
+                    f"status={r.status_code}")
+              # 无效 Token
+              r = client.get("/task/list", headers={"Authorization": "Bearer invalid_token"})
+              check("无效 Token 被拒绝", r.status_code == 401,
+                    f"status={r.status_code}")
+
+          # ---- 5. 云端转发 503 降级 ----
+          print("\n☁️  5. 云端降级逻辑")
+          r = client.get("/api/v1/cloud/queue/status",
+                         headers={"Authorization": f"Bearer {token}"})
+          check("队列状态 API 可访问", r.status_code == 200,
+                f"status={r.status_code}")
+
+          # ---- 6. 任务取消（无 Task 时应返回 404） ----
+          print("\n❌ 6. 任务取消")
+          r = client.post("/task/cancel",
+                          json={"task_id": "nonexistent"},
+                          headers={"Authorization": f"Bearer {token}"})
+          check("取消不存在 Task 返回 404", r.status_code == 404,
+                f"status={r.status_code}")
+
+          # ---- 7. 工作流翻译器 ----
+          print("\n🔄 7. 工作流翻译器")
+          from core.workflow_translator import WorkflowTranslator
+          translator = WorkflowTranslator()
+          try:
+              # 文生视频
+              translated = translator.translate_to_comfyui(
+                  model_type="txt2video",
+                  prompt="a cat",
+                  negative_prompt="",
+                  strength=0.6,
+                  duration=5,
+                  width=1280,
+                  height=720,
+                  num_frames=49,
+                  seed=None,
+              )
+              has_nodes = len(translated.get("nodes", [])) > 0
+              check("txt2video 翻译成功", has_nodes,
+                    f"nodes={len(translated.get('nodes', []))}")
+          except Exception as e:
+              check("txt2video 翻译成功", False, str(e))
+
+          try:
+              translated = translator.translate_to_comfyui(
+                  model_type="img2video",
+                  prompt="a cat walking",
+                  negative_prompt="",
+                  strength=0.6,
+                  duration=5,
+                  width=1280,
+                  height=720,
+                  num_frames=49,
+                  seed=None,
+                  image_path="/tmp/test.png",
+              )
+              has_nodes = len(translated.get("nodes", [])) > 0
+              check("img2video 翻译成功", has_nodes,
+                    f"nodes={len(translated.get('nodes', []))}")
+          except Exception as e:
+              check("img2video 翻译成功", False, str(e))
+
+          # ---- 8. 进度文案翻译器 ----
+          print("\n📊 8. 进度文案翻译器")
+          from core.progress_translator import ProgressTranslator
+          pt = ProgressTranslator()
+          try:
+              # 模拟 ComfyUI 原始 progress 消息
+              progress_msg = {
+                  "type": "progress",
+                  "data": {"value": 10, "max": 30, "prompt_id": "test"}
+              }
+              text = pt.translate(progress_msg)
+              check("进度翻译器输出非空", len(text) > 0, f"text='{text}'")
+              check("进度文案为中文", "进度" in text or "正在" in text or "渲染" in text,
+                    f"text='{text}'")
+          except Exception as e:
+              check("进度翻译器", False, str(e))
+
+          try:
+              # 模拟执行完成
+              exec_msg = {"type": "executing", "data": {"prompt_id": "test", "node": None}}
+              text = pt.translate(exec_msg)
+              check("执行完成文案", len(text) > 0, f"text='{text}'")
+          except Exception as e:
+              check("执行完成文案", False, str(e))
+
+          # ---- 9. 任务管理器 ----
+          print("\n📋 9. 任务管理器")
+          from core.task_manager import TaskManager
+          tm = TaskManager()
+          try:
+              result = tm.create_task("test-user", "txt2video", {"prompt": "test"})
+              check("创建 Task", "task_id" in result, str(result))
+              task_id = result["task_id"]
+
+              task = tm.get_task(task_id)
+              check("查询 Task", task is not None, f"status={task.get('status')}")
+
+              result = tm.cancel_task(task_id, "test-user")
+              check("取消 Task", result.get("status") in ("cancelled", "已取消"),
+                    str(result))
+          except Exception as e:
+              check("Task 生命周期", False, str(e))
+
+          # ---- 汇总 ----
+          print("\n" + "=" * 60)
+          total = results["passed"] + results["failed"]
+          print(f"📊 结果：{results['passed']}/{total} 通过，{results['failed']} 失败")
+          if results["failed"] > 0:
+              print("\n🔴 失败项详情：")
+              for d in results["details"]:
+                  if "FAIL" in d:
+                      print(d)
+              sys.exit(1)
+          else:
+              print("🟢 全部集成测试通过！")
+          PYEOF
+
+      - name: 运行集成测试
+        run: python integration_test.py
+        timeout-minutes: 10
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-report
+          path: integration_test.py
+
+  # ============ 5. 工作流 JSON 校验 ============
+  workflow-validation:
+    name: ComfyUI 工作流结构校验
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 校验工作流节点结构
+        run: |
+          python3 << 'PYEOF'
+          import json, pathlib, sys
+
+          expected_classes = {
+              "txt2video": ["Wan21VideoGenLoader", "Wan21T2VPipeline", "VAELoader",
+                            "CheckpointSave", "CLIPTextEncode", "ControlNetApply"],
+              "img2video": ["Wan21VideoGenLoader", "Wan21I2VPipeline", "IPAdapterApply",
+                            "VAELoader", "CheckpointSave", "ControlNetApply"],
+              "video2video": ["AnimateDiffLoader", "ControlNetApply", "VAELoader",
+                              "CheckpointSave", "CLIPTextEncode", "SamplerCustom"]
+          }
+
+          errors = []
+          for wf in sorted(pathlib.Path("workflows").rglob("*.json")):
+              data = json.loads(wf.read_text())
+              nodes = data.get("nodes", [])
+              node_classes = {n.get("class_type", "") for n in nodes}
+              wf_name = wf.stem
+
+              if wf_name in expected_classes:
+                  for exp in expected_classes[wf_name]:
+                      if not any(exp in c for c in node_classes):
+                          errors.append(f"  ❌ {wf_name}: 缺少节点 {exp}")
+
+              print(f"  ✅ {wf_name}: {len(nodes)} 节点, 类: {', '.join(sorted(node_classes)[:5])}...")
+
+          if errors:
+              print('\n'.join(errors))
+              sys.exit(1)
+          print("\n全部工作流节点结构校验通过")
+          PYEOF
+
+  # ============ 汇总 ============
+  summary:
+    name: 📋 CI 汇总
+    runs-on: ubuntu-22.04
+    needs: [python-lint, rust-lint, frontend-check, integration-test, workflow-validation]
+    if: always()
+    steps:
+      - name: 汇总报告
+        run: |
+          echo "======================================"
+          echo " NexusVideo CI Pipeline 汇总"
+          echo "======================================"
+          echo ""
+          echo " ✅ Python 后端验证: ${{ needs.python-lint.result }}"
+          echo " ✅ Rust 编译验证: ${{ needs.rust-lint.result }}"
+          echo " ✅ TypeScript 检查: ${{ needs.frontend-check.result }}"
+          echo " ✅ 端到端集成测试: ${{ needs.integration-test.result }}"
+          echo " ✅ 工作流结构校验: ${{ needs.workflow-validation.result }}"
+          echo ""
+          if [ "${{ needs.python-lint.result }}" == "success" ] && \
+             [ "${{ needs.rust-lint.result }}" == "success" ] && \
+             [ "${{ needs.frontend-check.result }}" == "success" ] && \
+             [ "${{ needs.integration-test.result }}" == "success" ] && \
+             [ "${{ needs.workflow-validation.result }}" == "success" ]; then
+            echo "🎉 全部 CI 检查通过！"
+          else
+            echo "⚠️  部分检查失败，请查看上方日志"
+            exit 1
+          fi

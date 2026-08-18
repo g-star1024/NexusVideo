@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 NexusVideo Backend - ComfyUI WebSocket 连接管理器
 ============================================================
@@ -38,6 +40,7 @@ ComfyUI WebSocket 消息格式参考：
     }
 """
 
+from fastapi import WebSocket
 import asyncio
 import json
 import uuid
@@ -147,7 +150,7 @@ class ComfyUIWebSocketListener:
         # 每个前端连接注册一个 {task_id → websocket} 对。
         # 广播时遍历所有注册的通道，将文案化消息推送过去。
         # ============================================================
-        self._frontends: dict[str, set[asyncio.WebSocket]] = {}
+        self._frontends: dict[str, set[WebSocket]] = {}
 
         # ============================================================
         # 前端通道的推送锁（防止并发写 WebSocket）
@@ -206,7 +209,7 @@ class ComfyUIWebSocketListener:
     # ================================================================
     # 前端 WebSocket 通道管理
     # ================================================================
-    async def register_frontend(self, task_id: str, ws: asyncio.WebSocket) -> None:
+    async def register_frontend(self, task_id: str, ws: WebSocket) -> None:
         """
         注册前端 WebSocket 连接。
 
@@ -216,7 +219,7 @@ class ComfyUIWebSocketListener:
         self._frontends.setdefault(task_id, set()).add(ws)
         logger.debug(f"注册前端通道：task_id={task_id}")
 
-    async def unregister_frontend(self, task_id: str, ws: asyncio.WebSocket) -> None:
+    async def unregister_frontend(self, task_id: str, ws: WebSocket) -> None:
         """前端 WebSocket 断开时取消注册。"""
         frontends = self._frontends.get(task_id)
         if frontends:
@@ -450,7 +453,7 @@ class ComfyUIWebSocketListener:
             payload_json = json.dumps(payload, ensure_ascii=False)
 
             # 逐个推送，失败的连接自动丢弃
-            dead_connections: set[asyncio.WebSocket] = set()
+            dead_connections: set[WebSocket] = set()
             for ws in frontends:
                 try:
                     await ws.send(payload_json)
