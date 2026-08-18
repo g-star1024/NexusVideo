@@ -69,6 +69,8 @@ pip-log.txt
 
 # ==================== ComfyUI / Models ====================
 models/
+!backend/models/
+!backend/models/**/*
 model_cache/
 output/
 temp/
