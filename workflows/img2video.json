@@ -1,0 +1,121 @@
+{
+  "1": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{prompt}}",
+      "clip": ["6", 0]
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{negative_prompt}}",
+      "clip": ["6", 0]
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{{input_image}}",
+      "upload": "image"
+    }
+  },
+  "4": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["3", 0],
+      "vae": ["7", 0]
+    }
+  },
+  "5": {
+    "class_type": "ControlNetApplyAdvanced",
+    "inputs": {
+      "positive": ["1", 0],
+      "negative": ["2", 0],
+      "control_net": ["9", 0],
+      "image": ["3", 0],
+      "strength": 0.6,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    }
+  },
+  "6": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "v1-5-pruned-emaonly.fp16.safetensors",
+      "type": "stable_diffusion"
+    }
+  },
+  "7": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "vae-ft-mse-840000-ema.pth"
+    }
+  },
+  "8": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "v1-5-pruned-emaonly.fp16.safetensors"
+    }
+  },
+  "9": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "control_depth_fp16.safetensors"
+    }
+  },
+  "10": {
+    "class_type": "AnimateDiffModelLoader",
+    "inputs": {
+      "model_name": "mm_sd_v15_v2.ckpt"
+    }
+  },
+  "11": {
+    "class_type": "AnimateDiffSampler",
+    "inputs": {
+      "model": ["8", 0],
+      "motion": ["10", 0],
+      "context_options": ["13", 0],
+      "frame_options": [],
+      "seed": "__INT__seed",
+      "steps": "__INT__steps",
+      "cfg": "__FLOAT__cfg",
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": "__FLOAT__denoising_strength",
+      "start_at_step": 0,
+      "end_at_step": 9999,
+      "return_with_leftover_noise": false,
+      "color_match": "None",
+      "force_offload_vae": true,
+      "preview_option": "auto",
+      "model_injection": true,
+      "context_scheduler": "uniform",
+      "context_length": "__INT__context_length",
+      "context_stride": 1,
+      "context_overlap": 4,
+      "context_batch_size": 1,
+      "context_smoothing": false,
+      "beta_schedule": "normal",
+      "cond_latents": ["4", 0],
+      "conditioning": ["5", 0],
+      "unconditioning": ["5", 1]
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["11", 0],
+      "vae": ["7", 0]
+    }
+  },
+  "13": {
+    "class_type": "ADE_basicContextOptions",
+    "inputs": {
+      "context_length": "__INT__context_length",
+      "context_stride": 1,
+      "context_overlap": 4,
+      "faster_cache": true
+    }
+  }
+}

@@ -1,0 +1,51 @@
+# ============================================================
+# NexusVideo 工作流 ConfigMap
+# 存储 ComfyUI 工作流 JSON 路径映射
+# ComfyUI Worker 通过 NAS 挂载访问实际工作流文件
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexusvideo-workflows
+  namespace: nexusvideo
+data:
+  # 工作流文件名 → 说明
+  # 实际文件存储在 NAS 的 /workflows 目录，此处仅作引用
+  workflows: |
+    {
+      "txt2video": {
+        "path": "/workflows/txt2video.json",
+        "description": "文生视频：文本提示词 → 视频",
+        "default_duration": 5,
+        "default_resolution": "848x480"
+      },
+      "img2video": {
+        "path": "/workflows/img2video.json",
+        "description": "图生视频：首帧图像 + 文本 → 视频",
+        "default_duration": 5,
+        "default_resolution": "848x480"
+      },
+      "video2video": {
+        "path": "/workflows/video2video.json",
+        "description": "视频转视频：输入视频 + 风格迁移 → 视频",
+        "default_duration": 5,
+        "default_resolution": "848x480"
+      },
+      "style_transfer": {
+        "path": "/workflows/style_transfer.json",
+        "description": "风格迁移：IP-Adapter 驱动",
+        "default_duration": 5,
+        "default_resolution": "848x480"
+      }
+    }
+  # ComfyUI 默认参数
+  comfyui_defaults: |
+    {
+      "model_directory": "/models",
+      "output_directory": "/output",
+      "input_directory": "/input",
+      "max_concurrent_tasks": 3,
+      "model_preload": ["wan2.1-t2v-14b"],
+      "allowed_safetensors": true,
+      "disable_metadata": true
+    }

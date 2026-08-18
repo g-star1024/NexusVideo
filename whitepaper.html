@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NexusVideo 技术白皮书 · 完整版</title>
+    <style>
+        /* 干净、专业、适合打印/阅读的样式 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #f2f4f8;
+            display: flex;
+            justify-content: center;
+            padding: 40px 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.7;
+            color: #1a1f2b;
+        }
+
+        .paper {
+            max-width: 1100px;
+            width: 100%;
+            background: #ffffff;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.08);
+            border-radius: 28px;
+            padding: 50px 60px;
+            transition: all 0.2s;
+        }
+
+        /* 排版 */
+        h1 {
+            font-size: 2.6rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-top: 0.2rem;
+            margin-bottom: 0.4rem;
+            color: #0b0f17;
+            border-bottom: 4px solid #4a6cf7;
+            padding-bottom: 16px;
+        }
+
+        .subhead {
+            font-size: 1.1rem;
+            color: #3d4457;
+            margin-bottom: 2.2rem;
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            border-bottom: 1px solid #eaeef3;
+            padding-bottom: 1rem;
+        }
+
+        h2 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-top: 2.6rem;
+            margin-bottom: 1rem;
+            color: #141b2b;
+            letter-spacing: -0.01em;
+            border-left: 6px solid #4a6cf7;
+            padding-left: 18px;
+        }
+
+        h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-top: 2rem;
+            margin-bottom: 0.6rem;
+            color: #1e2639;
+        }
+
+        h4 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-top: 1.5rem;
+            margin-bottom: 0.3rem;
+            color: #2a3349;
+        }
+
+        p {
+            margin-bottom: 1.1rem;
+            color: #232b3d;
+        }
+
+        ul, ol {
+            margin: 0.6rem 0 1.2rem 1.8rem;
+        }
+
+        li {
+            margin-bottom: 0.4rem;
+        }
+
+        a {
+            color: #4a6cf7;
+            text-decoration: none;
+        }
+
+        blockquote {
+            background: #f5f8ff;
+            border-left: 6px solid #4a6cf7;
+            padding: 1.2rem 1.8rem;
+            margin: 1.6rem 0;
+            border-radius: 8px 12px 12px 8px;
+            font-style: normal;
+            color: #1d263b;
+        }
+
+        code {
+            background: #eef2f6;
+            padding: 0.2rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+            color: #1f2a44;
+        }
+
+        pre {
+            background: #0d1117;
+            color: #e3e9f1;
+            padding: 1.5rem 1.8rem;
+            border-radius: 16px;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin: 1.5rem 0;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+            border: 1px solid #2d3748;
+        }
+
+        pre code {
+            background: transparent;
+            padding: 0;
+            color: inherit;
+            font-size: 0.9rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.8rem 0;
+            font-size: 0.95rem;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+        }
+
+        th {
+            background: #f0f4fe;
+            color: #1a263b;
+            font-weight: 600;
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 2px solid #cbd5e1;
+        }
+
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #e9edf3;
+            background: #ffffff;
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #4a6cf7;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 2px 12px;
+            border-radius: 20px;
+            letter-spacing: 0.3px;
+            margin-right: 8px;
+        }
+
+        .highlight-box {
+            background: #f8faff;
+            border: 1px solid #dce4f0;
+            border-radius: 20px;
+            padding: 1.8rem 2rem;
+            margin: 2rem 0;
+        }
+
+        .row {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .col {
+            flex: 1 1 200px;
+        }
+
+        hr {
+            border: 0;
+            height: 2px;
+            background: linear-gradient(to right, #e0e7ef, transparent);
+            margin: 2.8rem 0;
+        }
+
+        /* 打印优化 */
+        @media (max-width: 700px) {
+            .paper {
+                padding: 28px 18px;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+            pre {
+                padding: 1rem;
+                font-size: 0.8rem;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="paper">
+
+    <!-- 标题区 -->
+    <h1>🧊 NexusVideo 客户端开发路径与技术实现白皮书</h1>
+    <div class="subhead">
+        <span><span class="badge">V 1.0.0</span> 内部 · 密级公开</span>
+        <span>目标：全球最简单的 AI 视频生成桌面端</span>
+    </div>
+
+    <!-- 第一章 -->
+    <h2>第一章 · 产品定义与核心理念</h2>
+    <h3>1.1 产品灵魂</h3>
+    <blockquote>“像打字一样简单，像看好莱坞大片一样震撼”</blockquote>
+    <ul>
+        <li><strong>极致封装</strong>：用户下载 .exe 或 .dmg，双击下一步到底，不需要懂 Python、Cuda 或环境变量。</li>
+        <li><strong>沉浸式体验</strong>：全屏无噪点 UI，隐藏所有技术术语（如“潜空间”“VAE解码”），只保留人类能听懂的语言。</li>
+        <li><strong>本地与云端无感切换</strong>：用户不关心算力来源，只关心“生成速度快不快”。</li>
+    </ul>
+
+    <h3>1.2 目标用户画像</h3>
+    <ul>
+        <li><strong>短视频博主</strong>：快速生成视频素材，零代码基础。</li>
+        <li><strong>电商卖家</strong>：将产品图变成动态展示视频。</li>
+        <li><strong>普通白领/学生</strong>：做 PPT 或社交媒体，用 AI 生成炫酷背景。</li>
+    </ul>
+
+    <hr>
+
+    <!-- 第二章 -->
+    <h2>第二章 · 技术架构全景图</h2>
+    <h3>2.1 总体架构（三层分离）</h3>
+    <table>
+        <thead><tr><th>层级</th><th>技术选型</th><th>职责</th></tr></thead>
+        <tbody>
+            <tr><td><strong>表现层（前端）</strong></td><td>Tauri (Rust + Vue3/React)</td><td>极简交互、视频预览、用户设置</td></tr>
+            <tr><td><strong>调度层（本地服务）</strong></td><td>Python FastAPI</td><td>接收前端指令、管理 ComfyUI 进程、任务队列、切换云端/本地</td></tr>
+            <tr><td><strong>推理层（引擎）</strong></td><td>ComfyUI 便携版 + 云端 GPU 集群</td><td>实际执行视频生成的“黑盒”</td></tr>
+        </tbody>
+    </table>
+
+    <h3>2.2 客户端物理目录结构（用户不可见，但打包必需）</h3>
+    <pre>NexusVideo/
+├── NexusVideo.exe          # 主程序 (Tauri 编译)
+├── resources/
+│   ├── python_env/         # 嵌入式 Python 3.10 (无 Cuda，约 15MB)
+│   ├── comfyui/            # 完整 ComfyUI 便携版
+│   │   ├── custom_nodes/   # 内置插件 (AnimateDiff, ControlNet, IP-Adapter)
+│   │   └── models/         # 基础模型 (首次下载或预置)
+│   ├── workflows/          # API 格式 JSON 模板
+│   │   ├── txt2video.json
+│   │   └── img2video.json
+│   └── ffmpeg/             # 视频合成依赖
+└── config/                 # 用户配置文件</pre>
+
+    <hr>
+
+    <!-- 第三章 -->
+    <h2>第三章 · 核心功能规划（小白视角）</h2>
+    <h3>3.1 模式一：一句话出片（首页默认）</h3>
+    <ul>
+        <li><strong>交互</strong>：中央超大输入框，占屏幕 70%。</li>
+        <li><strong>用户操作</strong>：输入 “赛博朋克风格的猫在雨中走” → 点击【生成】。</li>
+        <li><strong>后台</strong>：自动调用 T2V 预设工作流，默认生成 3 秒视频（防爆显存），生成后循环预览。</li>
+    </ul>
+
+    <h3>3.2 模式二：图生视频与动效（电商/设计专用）</h3>
+    <ul>
+        <li><strong>交互</strong>：上传图片 + 描述运动（如“镜头缓慢推进，头发飘动”）。</li>
+        <li><strong>核心</strong>：AnimateDiff + ControlNet (Tile/IP-Adapter) 工作流。</li>
+        <li><strong>封装</strong>：前端仅显示“运动强度”滑块（1~10），后台映射为 Denoising Strength。</li>
+    </ul>
+
+    <h3>3.3 模式三：视频风格化</h3>
+    <ul>
+        <li><strong>交互</strong>：上传视频 + 选择风格（油画/3D/水墨）。</li>
+        <li><strong>逻辑</strong>：Video-to-Video + ControlNet 保持原结构，只改纹理。</li>
+    </ul>
+
+    <hr>
+
+    <!-- 第四章 -->
+    <h2>第四章 · 客户端封装详解（技术实现）</h2>
+    <h3>4.1 让 ComfyUI 成为“沉默的仆人”</h3>
+    <p>禁止 ComfyUI 弹出浏览器，以后台进程运行：</p>
+    <pre># Tauri 后端启动子进程（隐藏窗口）
+python main.py --headless --port 8188 --windows-foreground</pre>
+
+    <h3>4.2 写一个“翻译官”服务（核心胶水代码）</h3>
+    <p>FastAPI 中转服务 <code>local_server.py</code>，接收前端简化参数，映射为 ComfyUI 复杂 JSON。</p>
+    <pre>from fastapi import FastAPI
+import json, requests, random
+
+app = FastAPI()
+
+@app.post("/generate")
+def generate(request: dict):
+    with open("workflows/txt2video.json", "r") as f:
+        workflow = json.load(f)
+    
+    # 只替换用户输入，其他参数（步数、CFG）使用最优内置值
+    workflow["6"]["inputs"]["text"] = request["prompt"]
+    workflow["8"]["inputs"]["seed"] = random.randint(1, 1000000)
+    
+    resp = requests.post("http://127.0.0.1:8188/prompt", json={"prompt": workflow})
+    return {"task_id": resp.json()["prompt_id"]}</pre>
+
+    <h3>4.3 本地/云端无感切换（商业命脉）</h3>
+    <ul>
+        <li><strong>本地模式</strong>：请求 → <code>127.0.0.1:8188</code></li>
+        <li><strong>云端模式</strong>：请求 → 自有云服务器（阿里云/火山引擎 A100）</li>
+        <li><strong>智能路由</strong>：检测到显存 &lt; 6GB 时自动弹窗：“检测到您的显卡性能有限，是否开启云端极速模式？”</li>
+    </ul>
+
+    <hr>
+
+    <!-- 第五章 -->
+    <h2>第五章 · 前端 UI/UX 设计规范</h2>
+    <h3>5.1 设计语言：毛玻璃质感 + 黑暗极简</h3>
+    <ul>
+        <li><strong>主色调</strong>：深邃黑 <code>#0A0A0A</code> + 霓虹蓝紫渐变。</li>
+        <li><strong>字体</strong>：无衬线大字号，远距离清晰。</li>
+        <li><strong>布局</strong>：左侧历史缩略图，中央超大输入区，右侧（可折叠）高级参数。</li>
+    </ul>
+
+    <h3>5.2 核心交互优化（小白感知）</h3>
+    <ul>
+        <li><strong>进度文案化</strong>：不显示“45%”，而显示“正在构思画面…”“即将完成，请稍候…”。</li>
+        <li><strong>首屏引导</strong>：背景循环播放 NexusVideo 生成的精选视频集锦，中央输入框淡入。</li>
+        <li><strong>一键重试</strong>：点击“再来一次”，自动更换随机种子（用户无感）。</li>
+    </ul>
+
+    <hr>
+
+    <!-- 第六章 -->
+    <h2>第六章 · 开发路线图（Roadmap）</h2>
+    <table>
+        <thead><tr><th>阶段</th><th>时间</th><th>核心任务</th><th>交付物</th></tr></thead>
+        <tbody>
+            <tr><td><strong>P0 基建期</strong></td><td>第 1-2 周</td><td>ComfyUI 便携版封装，FastAPI 中转服务，Tauri 前后端通信</td><td>能通过客户端生成静态图（链路打通）</td></tr>
+            <tr><td><strong>P1 核心功能</strong></td><td>第 3-5 周</td><td>预设 3 个工作流，进度回传（WebSocket），主界面 UI</td><td>内测版：生成 5 秒视频，可交互</td></tr>
+            <tr><td><strong>P2 云端融合</strong></td><td>第 6-7 周</td><td>云端 API 转发，算力切换开关，用户系统（手机号登录）</td><td>公测版：支持云端生成</td></tr>
+            <tr><td><strong>P3 优化发布</strong></td><td>第 8 周</td><td>打包 .exe / .dmg，崩溃日志，官网下载</td><td><strong>V1.0.0 正式版</strong></td></tr>
+        </tbody>
+    </table>
+
+    <hr>
+
+    <!-- 第七章 -->
+    <h2>第七章 · 团队分工微调建议</h2>
+    <table>
+        <thead><tr><th>角色</th><th>人数</th><th>核心职责</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Rust 工程师</strong></td><td>1</td><td>Tauri 前端性能优化，与 Python 后端通信</td></tr>
+            <tr><td><strong>Python 后端</strong></td><td>1</td><td>维护 local_server.py，调试 ComfyUI JSON 工作流，爆显存优化</td></tr>
+            <tr><td><strong>前端开发 (Vue/React)</strong></td><td>1</td><td>UI 还原，毛玻璃动效，交互流畅</td></tr>
+            <tr><td><strong>UI 设计师</strong></td><td>1</td><td>全程配合，输出毛玻璃效果图</td></tr>
+            <tr><td><strong>算法支持 (兼职)</strong></td><td>1</td><td>挑选最优 ComfyUI 节点组合，保证生成质量</td></tr>
+        </tbody>
+    </table>
+
+    <hr>
+
+    <!-- 第八章 -->
+    <h2>第八章 · 启动前的最后忠告</h2>
+    <div class="highlight-box">
+        <ul style="margin-left: 0;">
+            <li><strong>📦 安装包大小</strong>：因内置 PyTorch 和基础模型，初始安装包约 <strong>15GB-20GB</strong>。官网提示：“请预留 30GB 硬盘空间，建议使用 SSD”。</li>
+            <li><strong>⏳ 首次启动</strong>：解压模型文件需 2-3 分钟“初始化”，务必加进度条，避免用户误以为卡死。</li>
+            <li><strong>💡 灵感引导</strong>：输入框下方加小字提示 “试试输入：赛博朋克、电影级光影、慢动作”，或内置 10 个“灵感词汇”按钮，点击自动填入。</li>
+        </ul>
+    </div>
+
+    <hr>
+
+    <!-- 结语 -->
+    <div style="background: #f0f5ff; border-radius: 24px; padding: 2rem 2.2rem; margin-top: 2.6rem;">
+        <p style="font-size: 1.2rem; font-weight: 500; margin-bottom: 0.4rem;">🚀 这份文档就是你的“施工图纸”</p>
+        <p style="margin-bottom: 0.3rem;">现在，你可以把它转发给技术负责人，照着第三章写代码，照着第四章做封装。</p>
+        <p style="color: #2d3b5c;">如果遇到具体技术难点（如 AnimateDiff 爆显存、Tauri 拖拽上传），随时沟通，我们来写代码片段。</p>
+        <p style="margin-top: 0.8rem; font-weight: 500; color: #1f2a4a;">—— 去改变世界吧！</p>
+    </div>
+
+    <!-- 页脚 -->
+    <div style="margin-top: 3.2rem; border-top: 1px solid #e2e8f0; padding-top: 1.5rem; font-size: 0.85rem; color: #5b6a85; display: flex; justify-content: space-between; flex-wrap: wrap;">
+        <span>NexusVideo · 白皮书 · 2026</span>
+        <span>版本 1.0.0 · 密级：公开</span>
+    </div>
+
+</div>
+</body>
+</html>

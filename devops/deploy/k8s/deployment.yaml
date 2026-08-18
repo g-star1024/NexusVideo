@@ -1,0 +1,150 @@
+# ============================================================
+# NexusVideo ComfyUI Worker Deployment
+#
+# 架构位置：推理计算层 — 实际运行 ComfyUI 的 GPU Pod
+# 挂载 NAS 到 /models（共享模型），输出写 /output 后由 Worker 上传 OSS
+# 资源限制确保单 Pod 只占用 1 张 GPU 卡
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: comfyui-worker
+  namespace: nexusvideo
+  labels:
+    app: comfyui-worker
+    role: inference
+spec:
+  replicas: 1  # 基线 1 台，由 HPA 自动扩缩
+  selector:
+    matchLabels:
+      app: comfyui-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: comfyui-worker
+        role: inference
+    spec:
+      # 调度到 GPU 节点（使用 taint/toleration 或 nodeSelector）
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-A10
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      terminationGracePeriodSeconds: 180  # 确保运行中任务完成
+      containers:
+        - name: comfyui-worker
+          image: registry.cn-beijing.aliyuncs.com/nexusvideo/comfyui-worker:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+              name: api
+              protocol: TCP
+            - containerPort: 8000
+              name: probe
+              protocol: TCP
+          env:
+            # 健康检查端口
+            - name: PROBE_PORT
+              value: "8000"
+            # ComfyUI API 端口
+            - name: COMFYUI_PORT
+              value: "9000"
+            # NAS 挂载路径
+            - name: NAS_MOUNT_PATH
+              value: "/models"
+            # 输出目录（临时，Worker 负责上传 OSS）
+            - name: OUTPUT_DIR
+              value: "/output"
+            # 输入目录（临时，用于接收前端上传的图片）
+            - name: INPUT_DIR
+              value: "/input"
+            # 并发上限
+            - name: MAX_CONCURRENT_TASKS
+              value: "3"
+            # OSS 配置
+            - name: OSS_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: nexusvideo-config
+                  key: OSS_BUCKET
+                  optional: true
+            - name: OSS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: nexusvideo-secrets
+                  key: OSS_ACCESS_KEY_ID
+            - name: OSS_ACCESS_KEY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nexusvideo-secrets
+                  key: OSS_ACCESS_KEY_SECRET
+            # 抢占式模式标记（弹性节点设置 true）
+            - name: SPOT_MODE
+              value: "false"
+          # 资源限制：单 Pod 占用 1 张 A10 24GB 显存
+          resources:
+            requests:
+              cpu: "2000m"
+              memory: "8Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8000m"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          # Volume 挂载
+          volumeMounts:
+            # NAS 模型存储 — 所有 Pod 共享同一份模型文件
+            - name: nas-models
+              mountPath: /models
+              readOnly: true
+            # 工作流配置文件
+            - name: workflows
+              mountPath: /app/workflows
+              readOnly: true
+            # 输出目录（临时，用于生成过程中写入）
+            - name: output-volume
+              mountPath: /output
+            # 输入目录（临时，用于接收用户上传的首帧图）
+            - name: input-volume
+              mountPath: /input
+          # 存活探针 — 仅检查进程是否存活
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: probe
+            initialDelaySeconds: 120  # ComfyUI 启动较慢
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          # 就绪探针 — 确认可以接新任务
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: probe
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+      # 挂载配置
+      volumes:
+        # NAS 网络存储（由 K8s CSI 驱动挂载，阿里云 ack-nas-csi-plugin）
+        - name: nas-models
+          persistentVolumeClaim:
+            claimName: nas-models-pvc
+        # 工作流 ConfigMap
+        - name: workflows
+          configMap:
+            name: nexusvideo-workflows
+        # 输出和输入临时卷
+        - name: output-volume
+          emptyDir:
+            sizeLimit: "20Gi"
+        - name: input-volume
+          emptyDir:
+            sizeLimit: "5Gi"

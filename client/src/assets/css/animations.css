@@ -1,0 +1,219 @@
+/*
+ * NexusVideo 动效样式库
+ * 来源：苏璃光 animation-spec.md v1.0
+ * 所有动效通过 CSS class 控制，Vue 只负责添加/移除 class
+ */
+
+/* ============ 一、进度条流动动画 ============ */
+@keyframes gradient-flow {
+  0%   { background-position: 0% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.progress-bar-flow {
+  width: 280px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin: 24px auto 0;
+}
+.progress-bar-flow::before {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--progress-flow);
+  background-size: 200% 100%;
+  animation: gradient-flow 1.5s linear infinite;
+}
+/* 带进度的进度条 */
+.progress-bar-real {
+  position: relative;
+  width: 280px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin: 24px auto 0;
+}
+.progress-bar-real__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: var(--progress-flow);
+  background-size: 200% 100%;
+  animation: gradient-flow 1.5s linear infinite;
+  transition: width 300ms var(--ease-out-quad);
+}
+
+/* ============ 二、呼吸动画（进度主文案） ============ */
+@keyframes breathing {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1.0; }
+}
+.progress-text--breathing {
+  animation: breathing 2s ease-in-out infinite;
+}
+
+/* ============ 三、进度文案 crossfade ============ */
+.progress-text-fade {
+  transition:
+    opacity 200ms cubic-bezier(0.65, 0.05, 0.36, 1),
+    transform 200ms cubic-bezier(0.65, 0.05, 0.36, 1);
+}
+.progress-text-fade.out {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.progress-text-fade.in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ============ 四、首屏引导动画 ============ */
+.hero-input-fade {
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity 600ms var(--ease-out-expo),
+    transform 600ms var(--ease-out-expo),
+    border-color var(--dur-hover) var(--ease-in-out-cubic),
+    box-shadow var(--dur-hover) var(--ease-in-out-cubic),
+    background var(--dur-hover) var(--ease-in-out-cubic);
+}
+.hero-input-fade.entered {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.btn-enter-fade {
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 400ms var(--ease-out-expo),
+    transform 400ms var(--ease-out-expo);
+}
+.btn-enter-fade.entered {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.word-btn-fade {
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 300ms var(--ease-out-quad),
+    transform 300ms var(--ease-out-quad);
+}
+.inspiration-words.entered .word-btn-fade {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sidebar-enter {
+  opacity: 0;
+  transform: translateX(-100%);
+  transition:
+    opacity 400ms var(--ease-out-expo),
+    transform 400ms var(--ease-out-expo);
+}
+.sidebar-enter.entered {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* ============ 五、脉冲动画（"再来一次"按钮） ============ */
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(91, 108, 255, 0.40); }
+  70%  { box-shadow: 0 0 0 12px rgba(91, 108, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(91, 108, 255, 0); }
+}
+.btn-retry--pulse {
+  animation: pulse-ring 2s var(--ease-out-quad);
+}
+.btn-retry--icon-spin {
+  transition: transform 500ms var(--ease-out-expo);
+}
+.btn-retry--icon-spin.spinning {
+  transform: rotate(360deg);
+}
+
+/* ============ 六、抽屉/弹窗 ============ */
+.drawer-enter {
+  animation: drawer-enter 300ms var(--ease-out-expo) forwards;
+}
+@keyframes drawer-enter {
+  from { opacity: 0; transform: translateX(100%); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.drawer-exit {
+  animation: drawer-exit 300ms var(--ease-in-out-cubic) forwards;
+}
+@keyframes drawer-exit {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(100%); }
+}
+.modal-enter {
+  animation: modal-enter 300ms var(--ease-out-expo) forwards;
+}
+@keyframes modal-enter {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* ============ 七、页面切换过渡 ============ */
+.page-fade-enter-active {
+  transition:
+    opacity 300ms var(--ease-out-expo),
+    transform 300ms var(--ease-out-expo);
+}
+.page-fade-leave-active {
+  transition:
+    opacity 200ms var(--ease-in-out-cubic),
+    transform 200ms var(--ease-in-out-cubic);
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* ============ 八、结果卡片进入 ============ */
+.result-card-enter {
+  opacity: 0;
+  transform: scale(0.96);
+  transition:
+    opacity 400ms var(--ease-out-expo),
+    transform 400ms var(--ease-out-expo);
+}
+.result-card-enter.entered {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ============ 九、初始化页动效 ============ */
+@keyframes init-glow-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes init-fade-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.init-page__glow {
+  opacity: 0;
+  animation: init-glow-in 800ms var(--ease-out-expo) forwards;
+}
+.init-page__fade {
+  opacity: 0;
+  animation: init-fade-in 600ms var(--ease-out-expo) 400ms forwards;
+}
+.init-page__fade-2 {
+  opacity: 0;
+  animation: init-fade-in 400ms var(--ease-out-expo) 800ms forwards;
+}

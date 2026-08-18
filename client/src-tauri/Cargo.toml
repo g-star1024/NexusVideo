@@ -1,0 +1,101 @@
+# ============================================================================
+# NexusVideo - Tauri 桌面端 (Rust 后端)
+# 架构师：封易安 (client-tauri-dev)
+# 说明：Tauri v2 工程，负责子进程管理 + IPC 通道 + 资源路径解析
+#       自动更新 + 崩溃日志系统 (Task #13)
+# ============================================================================
+[package]
+name = "nexusvideo-client"
+version = "0.1.0"
+description = "NexusVideo AI 视频生成桌面客户端"
+authors = ["NexusVideo Team"]
+edition = "2021"
+rust-version = "1.77"
+
+# lib + bin 双目标：lib.rs 供移动端/测试复用，main.rs 仅做引导
+[lib]
+name = "nexusvideo_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# ---- Tauri 核心 (v2) ----
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-shell = "2"      # 预留：外部命令 / 浏览器拉起
+tauri-plugin-dialog = "2"     # 文件选择对话框（图生视频上传）
+tauri-plugin-fs = "2"         # 本地文件读写（配置/历史记录）
+tauri-plugin-process = "2"    # 应用进程控制（退出/重启）
+tauri-plugin-http = "2"       # 云端 API 转发
+tauri-plugin-updater = "2"    # 自动更新 (Task #13)
+tauri-plugin-log = "2"        # 日志落盘
+
+# ---- 序列化 ----
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ---- 异步运行时 ----
+tokio = { version = "1", features = ["full"] }
+
+# ---- HTTP 客户端（Rust → FastAPI 转发 + 崩溃上报）----
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# ---- WebSocket（直连 ComfyUI/FastAPI 进度流）----
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+
+# ---- Futures 工具链（WebSocket StreamExt）----
+futures-util = "0.3"
+
+# ---- 日志 ----
+log = "0.4"
+
+# ---- 进程/系统信息（健康检测、孤儿进程回收、显存探测）----
+sysinfo = "0.30"
+
+# ---- 跨平台路径 ----
+dirs = "5"
+
+# ---- 错误处理 ----
+anyhow = "1"
+thiserror = "1"
+
+# ---- 时间 / Duration ----
+humantime = "2"
+
+# ---- Base64 解码（文件上传用）----
+base64 = "0.22"
+
+# ---- 崩溃日志：Rust panic 捕获 + 栈追踪 ----
+backtrace = "0.3"
+
+# ---- 时间戳 ----
+chrono = { version = "0.4", features = ["serde"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = []
+
+# ============================================================================
+# Profile: 优化冷启动与体积
+# ============================================================================
+[profile.release]
+opt-level = "z"        # 体积优先（z < s < 3），桌面端冷启动更友好
+lto = true             # 链接期优化，去掉未用代码
+codegen-units = 1      # 单元合并，进一步缩体积
+strip = true           # 剥离调试符号
+panic = "abort"        # panic 直接终止（桌面端不靠 unwind 恢复）
+
+# ============================================================================
+# Windows 专用配置 (MSVC toolchain)
+# ============================================================================
+[target.'cfg(windows)'.dependencies]
+# Windows 资源嵌入（版本号、图标等）
+winres = "0.1"
+
+# ============================================================================
+# macOS 专用配置
+# ============================================================================
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS 沙箱 / 权限辅助（预留）
+# macos-accessibility-api = "0.2"

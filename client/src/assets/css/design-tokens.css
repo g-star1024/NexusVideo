@@ -1,0 +1,162 @@
+/*
+ * NexusVideo 设计 Token 清单
+ * 来源：苏璃光 component-tokens.md v1.0
+ * 使用规则：
+ *   1. 禁止在组件中写裸颜色/裸尺寸值，必须通过 var(--token-name) 引用
+ *   2. 间距必须为 8px 的倍数
+ *   3. 字号必须从 --text-* 系列中选取
+ */
+
+:root {
+  /* ====== 一、背景色阶 ====== */
+  --bg-base:            #0A0A0A;
+  --bg-surface:         #121214;
+  --bg-elevated:        #1A1A1E;
+  --glass-1:            rgba(255, 255, 255, 0.04);
+  --glass-2:            rgba(255, 255, 255, 0.07);
+  --glass-3:            rgba(26, 26, 30, 0.80);
+  --hover-overlay:      rgba(255, 255, 255, 0.10);
+  --active-overlay:     rgba(255, 255, 255, 0.14);
+
+  /* ====== 二、品牌色 ====== */
+  --brand-blue:               #5B6CFF;
+  --brand-purple:             #B14CFF;
+  --brand-blue-hover:         #4A5BFF;
+  --brand-purple-hover:       #A03BFF;
+  --brand-blue-pressed:       #3A4BFF;
+  --brand-purple-pressed:     #8F2AFF;
+  --brand-gradient:           linear-gradient(135deg, #5B6CFF 0%, #B14CFF 100%);
+  --brand-gradient-hover:     linear-gradient(135deg, #4A5BFF 0%, #A03BFF 100%);
+  --brand-gradient-pressed:   linear-gradient(135deg, #3A4BFF 0%, #8F2AFF 100%);
+  --bg-glow:                  radial-gradient(circle at 50% 25%, rgba(91, 108, 255, 0.15) 0%, transparent 55%);
+  --bg-glow-purple:           radial-gradient(circle at 80% 70%, rgba(177, 76, 255, 0.10) 0%, transparent 50%);
+  --progress-flow:            linear-gradient(90deg, #5B6CFF, #B14CFF, #5B6CFF);
+
+  /* ====== 三、辅助点缀色 ====== */
+  --accent-cyan:  #3DD6E8;
+  --accent-pink:  #FF6B9D;
+
+  /* ====== 四、语义色 ====== */
+  --success:      #3DD68C;
+  --success-bg:   rgba(61, 214, 140, 0.12);
+  --warning:      #FFB938;
+  --warning-bg:   rgba(255, 185, 56, 0.12);
+  --error:        #FF5B5B;
+  --error-bg:     rgba(255, 91, 91, 0.12);
+  --info:         #5B6CFF;
+  --info-bg:      rgba(91, 108, 255, 0.12);
+
+  /* ====== 五、文字色 ====== */
+  --text-primary:            #F5F5F7;
+  --text-secondary:          #B0B0B8;
+  --text-tertiary:           #80808C;
+  --text-disabled:           #4A4A52;
+  --text-on-brand:           #FFFFFF;
+  --text-on-brand-disabled:  rgba(255, 255, 255, 0.40);
+
+  /* ====== 六、边框 ====== */
+  --border-subtle:   1px solid rgba(255, 255, 255, 0.06);
+  --border-default:  1px solid rgba(255, 255, 255, 0.10);
+  --border-strong:   1px solid rgba(255, 255, 255, 0.16);
+  --border-focus:    1px solid #5B6CFF;
+  --border-brand:    1px solid rgba(91, 108, 255, 0.50);
+  --border-error:    1px solid rgba(255, 91, 91, 0.30);
+  --border-dashed:   2px dashed rgba(255, 255, 255, 0.15);
+  --border-dashed-active: 2px solid #5B6CFF;
+  --divider:         1px solid rgba(255, 255, 255, 0.06);
+
+  /* ====== 七、阴影 ====== */
+  --shadow-sm:      0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-md:      0 8px 24px rgba(0, 0, 0, 0.40);
+  --shadow-lg:      0 16px 48px rgba(0, 0, 0, 0.50);
+  --shadow-glow:    0 0 0 4px rgba(91, 108, 255, 0.15);
+  --shadow-brand:   0 8px 24px rgba(91, 108, 255, 0.30);
+  --shadow-white:   0 0 0 4px rgba(255, 255, 255, 0.08);
+
+  /* ====== 八、圆角 ====== */
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   16px;
+  --radius-xl:   20px;
+  --radius-full: 9999px;
+
+  /* ====== 九、间距 (基于 8px 基础单位) ====== */
+  --space-xs:   4px;
+  --space-sm:   8px;
+  --space-md:   16px;
+  --space-lg:   24px;
+  --space-xl:   32px;
+  --space-2xl:  48px;
+  --space-3xl:  64px;
+
+  /* ====== 十、字体 ====== */
+  --font-sans: "Inter", "HarmonyOS Sans SC", "Noto Sans SC", "PingFang SC",
+               -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+
+  --text-display-xl:  48px;
+  --text-display-lg:  24px;
+  --text-h1:          28px;
+  --text-h2:          22px;
+  --text-h3:          18px;
+  --text-body-lg:     16px;
+  --text-body:        14px;
+  --text-body-sm:     13px;
+  --text-caption:     12px;
+  --text-btn:         14px;
+  --text-btn-sm:      13px;
+
+  --font-weight-regular: 400;
+  --font-weight-medium:  500;
+  --font-weight-semibold: 600;
+
+  --line-height-tight:  1.2;
+  --line-height-heading: 1.3;
+  --line-height-sub:    1.35;
+  --line-height-body:   1.6;
+  --line-height-small:  1.5;
+  --line-height-btn:    1.0;
+
+  --letter-spacing-negative: -0.02em;
+  --letter-spacing-heading:  -0.01em;
+  --letter-spacing-default:   0;
+  --letter-spacing-small:    0.01em;
+  --letter-spacing-btn:      0.02em;
+  --letter-spacing-label:    0.05em;
+
+  /* ====== 十一、毛玻璃效果 ====== */
+  --glass-blur-1:    blur(20px) saturate(150%);
+  --glass-blur-2:    blur(30px) saturate(160%);
+  --glass-blur-3:    blur(40px) saturate(180%);
+  --glass-blur-mask: blur(8px);
+
+  /* ====== 十二、缓动函数 ====== */
+  --ease-out-quad:      cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-in-out-cubic:  cubic-bezier(0.65, 0.05, 0.36, 1);
+  --ease-out-expo:      cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring:        cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-out:        ease-in-out;
+
+  /* ====== 十三、时长 ====== */
+  --dur-fast:     100ms;
+  --dur-hover:    150ms;
+  --dur-normal:   300ms;
+  --dur-slow:     400ms;
+  --dur-slower:   500ms;
+  --dur-brand:    800ms;
+
+  /* ====== 十四、布局尺寸 ====== */
+  --titlebar-height:    40px;
+  --statusbar-height:   32px;
+  --sidebar-width:      200px;
+  --sidebar-collapsed:  72px;
+  --content-width:      1248px;
+  --content-padding:    32px;
+  --hero-input-width:   900px;
+  --hero-input-height:  200px;
+  --upload-zone-width:  400px;
+  --upload-zone-height: 300px;
+  --motion-slider-width: 320px;
+  --style-card-width:   160px;
+  --style-card-height:  200px;
+}

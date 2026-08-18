@@ -1,0 +1,49 @@
+# ============================================================
+# NexusVideo NAS PersistentVolumeClaim
+#
+# 通过阿里云 NAS CSI 驱动挂载 NAS 文件系统到 Pod
+# 模型文件（/models）共享给所有 Worker Pod
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nas-models-pvc
+  namespace: nexusvideo
+spec:
+  accessModes:
+    - ReadWriteMany  # 多个 Worker Pod 共享读写
+  storageClassName: ack-nas-csi  # 阿里云 NAS CSI 存储类
+  resources:
+    requests:
+      storage: 200Gi
+  selector:
+    matchLabels:
+      app: nexusvideo
+      role: models
+---
+# 对应的 PersistentVolume（通常由 StorageClass 动态供给，
+# 此处静态声明以明确 NAS 挂载点）
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nas-models-pv
+  labels:
+    app: nexusvideo
+    role: models
+spec:
+  capacity:
+    storage: 200Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ack-nas-csi
+  mountOptions:
+    - nolock,tcp,noresvport
+    - vers=3
+  csi:
+    driver: nasplugin.csi.alibabacloud.com
+    volumeHandle: nexusvideo-staging-nas
+    volumeAttributes:
+      server: "xxxx-xxxx-xxxx.nas.aliyun.com"  # NAS 挂载点（从 Terraform output 获取）
+      path: "/models"
+      nasType: "nas"

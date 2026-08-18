@@ -1,0 +1,114 @@
+{
+  "1": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{prompt}}",
+      "clip": ["2", 0]
+    }
+  },
+  "2": {
+    "class_type": "CLIPSetLastLayer",
+    "inputs": {
+      "clip": ["7", 1],
+      "which_layer": -2
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{negative_prompt}}",
+      "clip": ["2", 0]
+    }
+  },
+  "4": {
+    "class_type": "WanVideoWrapper",
+    "inputs": {
+      "model": ["12", 0],
+      "vae": ["11", 0],
+      "clip": ["2", 0],
+      "sageattn": false,
+      "teacache": true,
+      "teacache_interval": 4
+    }
+  },
+  "5": {
+    "class_type": "EmptyHunYuanLatentVideo",
+    "inputs": {
+      "width": "__INT__width",
+      "height": "__INT__height",
+      "length": "__INT__frames",
+      "batch_size": 1
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["4", 0],
+      "seed": "__INT__seed",
+      "steps": "__INT__steps",
+      "cfg": "__FLOAT__cfg",
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "start_at_step": 0,
+      "end_at_step": 9999,
+      "return_with_leftover_noise": false,
+      "model_options": {},
+      "conditioning": ["1", 0],
+      "unconditioning": ["3", 0],
+      "latent_image": ["5", 0]
+    }
+  },
+  "7": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.1-t2v-14b-Q4_K_M.gguf",
+      "weight_dtype": "default"
+    }
+  },
+  "8": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "9": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "sdxl"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "samples": ["6", 0],
+      "vae": ["8", 0],
+      "tile_size": 96,
+      "overlap": 0.083
+    }
+  },
+  "11": {
+    "class_type": "RIFEFrameInterpolator",
+    "inputs": {
+      "frames": ["10", 0],
+      "model": "rife49",
+      "frames_count": 75,
+      "multiplier": 3
+    }
+  },
+  "12": {
+    "class_type": "FFMPEG_VideoCombine",
+    "inputs": {
+      "images": ["11", 0],
+      "frame_rate": 24,
+      "crf": 18,
+      "save_metadata": true,
+      "pingpong": false,
+      "save_output": true,
+      "filename_prefix": "nexus_t2v",
+      "format": "video/mp4",
+      "codec": "libx264"
+    }
+  }
+}

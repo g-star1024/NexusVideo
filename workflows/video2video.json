@@ -1,0 +1,155 @@
+{
+  "1": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{prompt}}",
+      "clip": ["7", 0]
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{negative_prompt}}",
+      "clip": ["7", 0]
+    }
+  },
+  "3": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "{{video_path}}",
+      "force_rate": 8,
+      "force_size": "512x512",
+      "frame_load_cap": "__INT__frame_cap",
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    }
+  },
+  "4": {
+    "class_type": "Preprocessor",
+    "inputs": {
+      "resolution": 512,
+      "detect_resolution": 512,
+      "images": ["3", 0]
+    }
+  },
+  "5": {
+    "class_type": "ControlNetApplyAdvanced",
+    "inputs": {
+      "positive": ["1", 0],
+      "negative": ["2", 0],
+      "control_net": ["9", 0],
+      "image": ["4", 0],
+      "strength": 0.75,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    }
+  },
+  "6": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "v1-5-pruned-emaonly.fp16.safetensors"
+    }
+  },
+  "7": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "v1-5-pruned-emaonly.fp16.safetensors",
+      "type": "stable_diffusion"
+    }
+  },
+  "8": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "vae-ft-mse-840000-ema.pth"
+    }
+  },
+  "9": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "control_depth_fp16.safetensors"
+    }
+  },
+  "10": {
+    "class_type": "AnimateDiffModelLoader",
+    "inputs": {
+      "model_name": "mm_sd_v15_v2.ckpt"
+    }
+  },
+  "11": {
+    "class_type": "ADE_AnimateDiffCombine",
+    "inputs": {
+      "images": ["3", 1],
+      "frame_rate": 8,
+      "loop_count": 0,
+      "save_output": false,
+      "return_video_frame": true
+    }
+  },
+  "12": {
+    "class_type": "ADE_EmptyFrameLatentVideo",
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "length": "__INT__frame_cap",
+      "batch_size": 1
+    }
+  },
+  "13": {
+    "class_type": "ADE_standardAnimateDiffModel",
+    "inputs": {
+      "model": ["6", 0],
+      "context_options": ["15", 0],
+      "motion": ["10", 0],
+      "frame_options": []
+    }
+  },
+  "14": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["13", 0],
+      "seed": "__INT__seed",
+      "steps": "__INT__steps",
+      "cfg": "__FLOAT__cfg",
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": "__FLOAT__denoising_strength",
+      "start_at_step": 0,
+      "end_at_step": 9999,
+      "return_with_leftover_noise": false,
+      "model_options": {},
+      "conditioning": ["5", 0],
+      "unconditioning": ["5", 1],
+      "latent_image": ["12", 0]
+    }
+  },
+  "15": {
+    "class_type": "ADE_basicContextOptions",
+    "inputs": {
+      "context_length": 16,
+      "context_stride": 1,
+      "context_overlap": 4,
+      "faster_cache": true
+    }
+  },
+  "16": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["14", 0],
+      "vae": ["8", 0]
+    }
+  },
+  "17": {
+    "class_type": "FFMPEG_VideoCombine",
+    "inputs": {
+      "images": ["16", 0],
+      "frame_rate": 24,
+      "crf": 18,
+      "save_metadata": true,
+      "pingpong": false,
+      "save_output": true,
+      "filename_prefix": "nexus_v2v",
+      "format": "video/mp4",
+      "codec": "libx264"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "notes": "NexusVideo v1.0.0 发布说明\n\n## 新功能\n- AI 视频生成（文生视频 / 图生视频）\n- 云端 + 本地双模式切换\n- 手机号登录 + JWT 鉴权\n- 生成历史与项目管理\n- 实时进度反馈\n\n## 修复\n- 修复本地 ComfyUI 路径自动检测问题\n- 优化视频上传性能\n\n## 已知问题\n- 大模型加载时可能需要 2-5 分钟预热",
+  "pub_date": "2026-08-18T00:00:00+08:00",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "-----BEGIN MESSAGE SIGNATURE-----\nMEUCIQD...\n-----END MESSAGE SIGNATURE-----",
+      "url": "https://update.nexusvideo.com/releases/1.0.0/nexusvideo-1.0.0-x86_64-setup.exe",
+      "sha256": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+    },
+    "linux-x86_64": {
+      "signature": "-----BEGIN MESSAGE SIGNATURE-----\nMEUCIQD...\n-----END MESSAGE SIGNATURE-----",
+      "url": "https://update.nexusvideo.com/releases/1.0.0/nexusvideo-1.0.0-x86_64.AppImage",
+      "sha256": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
+    },
+    "darwin-aarch64": {
+      "signature": "-----BEGIN MESSAGE SIGNATURE-----\nMEUCIQD...\n-----END MESSAGE SIGNATURE-----",
+      "url": "https://update.nexusvideo.com/releases/1.0.0/nexusvideo-1.0.0-aarch64.dmg",
+      "sha256": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4"
+    }
+  }
+}
