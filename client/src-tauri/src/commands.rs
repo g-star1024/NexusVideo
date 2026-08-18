@@ -10,6 +10,7 @@ use crate::init_flow;
 use crate::process_manager::{ProcKind, ProcessManager};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 
@@ -595,12 +596,13 @@ pub async fn listen_progress(
     let task_id_clone = task_id.clone();
     let ws_url = format!("{base}/progress/ws?task_id={task_id}");
 
-    // 创建 CancellationToken 用于后续 stop_progress 取消
-    let cancel = tokio::sync::Notify::new();
+    // 用 Arc 包装 Notify，确保可安全传递给 'static future（tokio::spawn）
+    let cancel = Arc::new(tokio::sync::Notify::new());
 
     let app_clone = app.clone();
+    let cancel_clone = Arc::clone(&cancel);
     let handle = tokio::spawn(async move {
-        listen_progress_loop(ws_url, task_id_clone, app_clone, &cancel).await;
+        listen_progress_loop(ws_url, task_id_clone, app_clone, &cancel_clone).await;
     });
 
     // 存储句柄供 stop_progress 使用

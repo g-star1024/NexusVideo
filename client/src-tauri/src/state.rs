@@ -10,7 +10,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::time::Duration;
 use std::sync::Arc;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::RwLock;
 
 /// 端口常量（与 backend/config.py 对齐）
 ///   ComfyUI : 8188（白皮书指定）
@@ -27,9 +27,9 @@ pub struct AppState {
     /// 用 Arc<RwLock<>> 包装以支持 tokio::spawn 内共享（'static 生命周期）
     pub proc_mgr: Arc<RwLock<ProcessManager>>,
 
-    /// 进度监听 WebSocket 任务句柄（task_id → (JoinHandle, Notify)）
-    /// 用于 stop_progress 命令取消后台监听任务
-    pub progress_handles: RwLock<HashMap<String, (tokio::task::JoinHandle<()>, Notify)>>,
+    /// 进度监听 WebSocket 任务句柄（task_id → (JoinHandle, Arc<Notify>)）
+    /// 用 Arc<Notify> 确保可安全传递给 'static future（tokio::spawn）
+    pub progress_handles: RwLock<HashMap<String, (tokio::task::JoinHandle<()>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl AppState {
