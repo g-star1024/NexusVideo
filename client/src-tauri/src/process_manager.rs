@@ -370,8 +370,8 @@ impl ProcessManager {
                     let cui = comfyui_arc.lock().await;
                     let fapi = fastapi_arc.lock().await;
                     (
-                        cui.child.as_ref().map(|c| c.stdout().is_some()).unwrap_or(false),
-                        fapi.child.as_ref().map(|c| c.stdout().is_some()).unwrap_or(false),
+                        cui.child.as_ref().map(|c| c.stdout.is_some()).unwrap_or(false),
+                        fapi.child.as_ref().map(|c| c.stdout.is_some()).unwrap_or(false),
                     )
                 };
 
