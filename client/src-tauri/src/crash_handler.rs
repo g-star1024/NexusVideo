@@ -152,7 +152,7 @@ pub fn install_panic_hook(app: AppHandle) {
             .unwrap_or_else(|| "未知位置".to_string());
 
         // 4) 生成栈追踪
-        let stack = format!("{:#}", backtrace::Backtrace::new());
+        let stack = format!("{:#?}", backtrace::Backtrace::new());
 
         // 5) 构建崩溃记录
         let record = CrashRecord::new(&format!("{}\n位置: {}\n\n栈追踪:\n{}", message, location, stack), "");
