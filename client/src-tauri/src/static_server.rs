@@ -92,15 +92,16 @@ impl StaticServer {
 }
 
 /// 获取全局单例静态服务器（创建或返回已有）
-pub fn get_static_server(app: AppHandle) -> Arc<Mutex<StaticServer>> {
+pub async fn get_static_server(app: AppHandle) -> Arc<Mutex<StaticServer>> {
     STATIC_SERVER
-        .get_or_init(|| Arc::new(Mutex::new(StaticServer::new(app))))
+        .get_or_init(|| async { Arc::new(Mutex::new(StaticServer::new(app))) })
+        .await
         .clone()
 }
 
 /// 启动全局静态服务器（幂等操作）
 pub async fn start_static_server(app: AppHandle) -> Result<(), String> {
-    let server = get_static_server(app.clone());
+    let server = get_static_server(app.clone()).await;
     {
         let mut s = server.lock().await;
         if s.accept_handle.is_some() {
