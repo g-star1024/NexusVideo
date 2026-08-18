@@ -68,18 +68,16 @@ jobs:
 
       - name: 验证 FastAPI 路由导入
         run: |
+          set +e
           python -c "
           import sys, pathlib, importlib, traceback, os
           sys.path.insert(0, str(pathlib.Path('backend').resolve()))
-
-          # 打印依赖版本以便排查
           for pkg in ['websockets', 'bcrypt', 'httpx', 'fastapi', 'pydantic']:
               try:
                   mod = importlib.import_module(pkg)
                   print(f'  [dep] {pkg}=={getattr(mod, \"__version__\", \"unknown\")}')
               except ImportError as e:
                   print(f'  [dep] {pkg}: NOT INSTALLED - {e}')
-
           modules = [
               'core.auth', 'core.comfyui_client', 'core.comfyui_ws',
               'core.inference_router', 'core.progress_translator',
@@ -97,12 +95,22 @@ jobs:
                   print(f'  ❌ {m}: {type(e).__name__}: {e}')
                   traceback.print_exc()
                   failed.append((m, type(e).__name__, str(e)))
-
           if failed:
-              print(f'\\n{len(failed)}/{len(modules)} 个模块导入失败，详细错误见上方 traceback')
+              print(f'\\n{len(failed)}/{len(modules)} 个模块导入失败')
               sys.exit(1)
           print(f'\\n全部 {len(modules)} 个模块导入成功')
-          "
+          " 2>&1 | tee python-import.log
+          PY_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ $PY_EXIT -ne 0 ]; then
+            {
+              echo "## Python import FAILED (exit=$PY_EXIT)"
+              echo '```'
+              cat python-import.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit $PY_EXIT
+          fi
 
   # ============ 2. Rust / Tauri 编译验证 ============
   rust-lint:
@@ -160,11 +168,19 @@ jobs:
             echo ""
             echo "=== cargo check 失败（exit code=$EXIT_CODE）==="
             echo ""
-            echo "=== 错误详情（error: 开头的行）==="
-            grep -E "^error|^  -->" cargo-check.log || true
+            echo "=== 错误详情 ==="
+            grep -E "^error|^  -->|^  |error\[" cargo-check.log || true
             echo ""
-            echo "=== 最后 100 行日志 ==="
-            tail -100 cargo-check.log
+            echo "=== 最后 80 行 ==="
+            tail -80 cargo-check.log
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Rust cargo check FAILED (exit=$EXIT_CODE)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "^error|^  -->|^  |error\[" cargo-check.log >> "$GITHUB_STEP_SUMMARY" || true
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo "=== LAST 80 LINES ===" >> "$GITHUB_STEP_SUMMARY"
+            tail -80 cargo-check.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit $EXIT_CODE
           fi
         timeout-minutes: 15
