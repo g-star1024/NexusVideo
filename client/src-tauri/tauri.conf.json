@@ -84,7 +84,7 @@
       "nsis": {
         "displayLanguageSelector": true,
         "installerIcon": "icons/icon.ico",
-        "installerHeaderImage": null,
+        "headerImage": null,
         "languages": ["SimpChinese", "English"],
         "installerHooks": null
       }

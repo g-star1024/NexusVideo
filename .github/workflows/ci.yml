@@ -55,7 +55,8 @@ jobs:
           for wf in sorted(pathlib.Path('workflows').rglob('*.json')):
               try:
                   data = json.loads(wf.read_text())
-                  nodes = data.get('nodes', [])
+                  # ComfyUI native format: keys are node IDs (not a 'nodes' array)
+                  nodes = {k: v for k, v in data.items() if isinstance(v, dict)}
                   print(f'  ✅ {wf.name}: {len(nodes)} nodes')
               except json.JSONDecodeError as e:
                   errors.append(f'  ❌ {wf}: {e}')
@@ -67,9 +68,9 @@ jobs:
 
       - name: 验证 FastAPI 路由导入
         run: |
-          cd backend
           python -c "
-          import sys, importlib
+          import sys, pathlib, importlib
+          sys.path.insert(0, str(pathlib.Path('backend').resolve()))
           modules = [
               'core.auth', 'core.comfyui_client', 'core.comfyui_ws',
               'core.inference_router', 'core.progress_translator',
@@ -141,9 +142,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
-          cache-directory: client/node_modules
+          cache-dependency-path: "client/package-lock.json"
 
       - name: Install frontend dependencies
         run: |
@@ -202,12 +203,14 @@ jobs:
           import json, pathlib, sys
 
           expected_classes = {
-              "txt2video": ["Wan21VideoGenLoader", "Wan21T2VPipeline", "VAELoader",
-                            "CheckpointSave", "CLIPTextEncode", "ControlNetApply"],
-              "img2video": ["Wan21VideoGenLoader", "Wan21I2VPipeline", "IPAdapterApply",
-                            "VAELoader", "CheckpointSave", "ControlNetApply"],
-              "video2video": ["AnimateDiffLoader", "ControlNetApply", "VAELoader",
-                              "CheckpointSave", "CLIPTextEncode", "SamplerCustom"]
+              "txt2video": ["WanVideoWrapper", "KSampler", "UNETLoader",
+                            "CLIPLoader", "VAELoader", "CLIPTextEncode"],
+              "img2video": ["AnimateDiffModelLoader", "AnimateDiffSampler",
+                            "ControlNetLoader", "ControlNetApplyAdvanced",
+                            "VAELoader", "CheckpointLoaderSimple"],
+              "video2video": ["ADE_AnimateDiffCombine", "ADE_EmptyFrameLatentVideo",
+                              "AnimateDiffModelLoader", "ControlNetLoader",
+                              "Preprocessor", "VHS_LoadVideo"]
           }
 
           errors = []

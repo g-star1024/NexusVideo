@@ -10,7 +10,9 @@ lerna-debug.log*
 dist/
 *.tgz
 *.log
-package-lock.json
+
+# 例外：client/ 的 lockfile 需要提交（CI 需要 npm ci）
+!client/package-lock.json
 
 # Environment
 .env
