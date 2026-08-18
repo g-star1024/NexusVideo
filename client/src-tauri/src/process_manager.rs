@@ -605,7 +605,7 @@ async fn probe_ws(host: &str, port: u16, path: &str) -> bool {
     let url = format!("ws://{host}:{port}{path}");
     // 使用 tokio-tungstenite 尝试建立 WebSocket 连接
     // connect_async 返回 Result<(WebSocketStream, Response), Error>
-    if let Ok((ws, _)) = tokio_tungstenite::tokio__connect_async(&url).await {
+    if let Ok((ws, _)) = tokio_tungstenite::connect_async(&url).await {
         // 成功建立连接后立即关闭（不发送任何消息）
         drop(ws);
         true

@@ -660,7 +660,7 @@ async fn listen_progress_loop(
         }
 
         // 建立 WebSocket 连接
-        let (ws_stream, _) = match tokio_tungstenite::tokio__connect_async(&ws_url).await {
+        let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
             Ok(result) => result,
             Err(e) => {
                 retry += 1;

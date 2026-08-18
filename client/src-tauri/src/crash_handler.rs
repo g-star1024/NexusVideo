@@ -29,7 +29,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::paths::config_dir;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 // ---- 事件常量 ----
 pub const EVENT_CRASH: &str = "app://crash";

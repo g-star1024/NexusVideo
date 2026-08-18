@@ -24,7 +24,7 @@
 //!   4) 本阶段使用全量更新（简单可靠）；增量方案留作 P2 优化
 //! ============================================================================
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 // ---- 事件常量 ----
@@ -38,12 +38,21 @@ pub const EVENT_UPDATE_ERROR: &str = "update://error";
 /// - 有新版本时通过 EVENT_UPDATE_AVAILABLE 通知前端
 /// - 用户确认下载后触发 EVENT_UPDATE_DOWNLOADING / EVENT_UPDATE_DOWNLOADED
 pub async fn check_for_updates(app: AppHandle) {
-    let updater = match app.updater().check().await {
-        Ok(updater) => updater,
+    let updater = match app.updater().await {
+        Ok(updater) => match updater.check().await {
+            Ok(u) => u,
+            Err(e) => {
+                log::warn!("[auto_update] 更新检查失败: {e}");
+                let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_ERROR, serde_json::json!({
+                    "error": e.to_string(),
+                    "message": "更新检查失败，请稍后重试"
+                }));
+                return;
+            }
+        },
         Err(e) => {
-            // 静默失败：网络不可用 / 端点未配置（开发环境）不阻塞启动
             log::warn!("[auto_update] 更新检查失败: {e}");
-            let _ = app.emit(EVENT_UPDATE_ERROR, serde_json::json!({
+            let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_ERROR, serde_json::json!({
                 "error": e.to_string(),
                 "message": "更新检查失败，请稍后重试"
             }));
@@ -68,7 +77,7 @@ pub async fn check_for_updates(app: AppHandle) {
     );
 
     // 通知前端展示更新提示弹窗
-    let _ = app.emit(EVENT_UPDATE_AVAILABLE, serde_json::json!({
+    let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_AVAILABLE, serde_json::json!({
         "current_version": current_version,
         "new_version": new_version,
         "release_notes": release_notes,
@@ -78,8 +87,13 @@ pub async fn check_for_updates(app: AppHandle) {
 
 /// 开始下载更新包
 pub async fn start_download(app: AppHandle) -> Result<(), String> {
-    let updater = app.updater();
-    let mut updater = updater.check().map_err(|e| e.to_string())?;
+    let mut updater = match app.updater().await {
+        Ok(up) => match up.check().await {
+            Ok(u) => u,
+            Err(e) => return Err(e.to_string()),
+        },
+        Err(e) => return Err(e.to_string()),
+    };
 
     if updater.is_latest() {
         return Ok(());
@@ -88,7 +102,7 @@ pub async fn start_download(app: AppHandle) -> Result<(), String> {
     let new_version = updater.version().to_string();
 
     // 通知前端下载开始
-    let _ = app.emit(EVENT_UPDATE_DOWNLOADING, serde_json::json!({
+    let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_DOWNLOADING, serde_json::json!({
         "version": new_version,
         "progress": 0,
         "message": "正在下载更新包，请稍候..."
@@ -104,7 +118,7 @@ pub async fn start_download(app: AppHandle) -> Result<(), String> {
     }).await.map_err(|e| e.to_string())?;
 
     // 通知前端更新已下载，等待重启安装
-    let _ = app.emit(EVENT_UPDATE_DOWNLOADED, serde_json::json!({
+    let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_DOWNLOADED, serde_json::json!({
         "version": new_version,
         "message": "更新下载完成，重启后自动安装"
     }));
