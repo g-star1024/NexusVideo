@@ -103,12 +103,16 @@ jobs:
           PY_EXIT=${PIPESTATUS[0]}
           set -e
           if [ $PY_EXIT -ne 0 ]; then
-            {
-              echo "## Python import FAILED (exit=$PY_EXIT)"
-              echo '```'
-              cat python-import.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            # 写入 GitHub annotations（API 可访问）
+            while IFS= read -r line; do
+              if [[ "$line" =~ ^\ \ ❌ ]]; then
+                echo "::error::python: $line"
+              elif [[ "$line" =~ ^Traceback ]]; then
+                echo "::error::python traceback: $line"
+              elif [[ "$line" =~ ^File\ |^[A-Za-z_].*Error: ]]; then
+                echo "::error::python detail: $line"
+              fi
+            done < python-import.log
             exit $PY_EXIT
           fi
 
@@ -173,14 +177,22 @@ jobs:
             echo ""
             echo "=== 最后 80 行 ==="
             tail -80 cargo-check.log
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "## Rust cargo check FAILED (exit=$EXIT_CODE)" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            grep -E "^error|^  -->|^  |error\[" cargo-check.log >> "$GITHUB_STEP_SUMMARY" || true
-            echo '' >> "$GITHUB_STEP_SUMMARY"
-            echo "=== LAST 80 LINES ===" >> "$GITHUB_STEP_SUMMARY"
-            tail -80 cargo-check.log >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+            # 将 cargo 错误作为 GitHub annotation 写入（API 可访问）
+            while IFS= read -r line; do
+              if [[ "$line" =~ ^error\[? ]]; then
+                echo "::error::cargo: $line"
+              elif [[ "$line" =~ ^\ \ \-\-\-\> ]]; then
+                # 提取文件路径和行号
+                if [[ "$line" =~ (src/[^\ :]+):([0-9]+):([0-9]+) ]]; then
+                  filepath="${BASH_REMATCH[1]}"
+                  lineno="${BASH_REMATCH[2]}"
+                  echo "::error file=client/src-tauri/$filepath,line=$lineno::cargo location"
+                fi
+              elif [[ "$line" =~ ^\ \ \| ]]; then
+                echo "::error::cargo context: $line"
+              fi
+            done < cargo-check.log
             exit $EXIT_CODE
           fi
         timeout-minutes: 15
