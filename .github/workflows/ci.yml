@@ -70,43 +70,29 @@ jobs:
         env:
           PYTHONPATH: backend
         run: |
-          set +e
+          set -e
+          echo "=== Python 版本 ==="
+          python --version
           echo "=== sys.path 调试 ==="
           python -c "import sys; print('\n'.join(sys.path[:10]))"
           echo "=== models 目录 ==="
-          ls -la backend/models/
+          ls -la backend/models/ || echo "models dir MISSING"
+          echo "=== 安装验证 ==="
+          python -c "import fastapi, pydantic, httpx, websockets, bcrypt; print('fastapi', fastapi.__version__); print('pydantic', pydantic.__version__); print('httpx', httpx.__version__); print('websockets', websockets.__version__); print('bcrypt', bcrypt.__version__)"
+          echo "=== 导入测试 ==="
           python -c "
-          import sys, pathlib, importlib, traceback, os
-          # 双重保险：同时添加 backend 绝对路径
+          import sys, pathlib, importlib
           backend_abs = str(pathlib.Path('backend').resolve())
           if backend_abs not in sys.path:
               sys.path.insert(0, backend_abs)
           print(f'sys.path[0] = {sys.path[0]}')
-          # 先测试 models 能否导入
           try:
               import models
-              print(f'  [dep] models package found at: {models.__file__}')
-          except ImportError as e:
-              print(f'  [dep] models NOT FOUND: {e}')
-              # 尝试直接导入 schemas
-              try:
-                  import models.schemas
-                  print(f'  [dep] models.schemas found: {models.schemas.__file__}')
-              except ImportError as e2:
-                  print(f'  [dep] models.schemas NOT FOUND: {e2}')
-                  # 打印目录内容
-                  models_dir = pathlib.Path('backend/models')
-                  print(f'  [dep] backend/models/ exists: {models_dir.exists()}')
-                  if models_dir.exists():
-                      for f in models_dir.iterdir():
-                          print(f'  [dep]   {f.name}')
+              print('  models OK:', models.__file__)
+          except Exception as e:
+              print(f'  models FAIL: {type(e).__name__}: {e}')
+              import traceback; traceback.print_exc()
               sys.exit(1)
-          for pkg in ['websockets', 'bcrypt', 'httpx', 'fastapi', 'pydantic']:
-              try:
-                  mod = importlib.import_module(pkg)
-                  print(f'  [dep] {pkg}=={getattr(mod, \"__version__\", \"unknown\")}')
-              except ImportError as e:
-                  print(f'  [dep] {pkg}: NOT INSTALLED - {e}')
           modules = [
               'core.auth', 'core.comfyui_client', 'core.comfyui_ws',
               'core.inference_router', 'core.progress_translator',
@@ -115,34 +101,16 @@ jobs:
               'routers.progress', 'routers.system', 'routers.task', 'routers.upload',
               'config', 'exceptions', 'local_server'
           ]
-          failed = []
           for m in modules:
               try:
                   importlib.import_module(m)
-                  print(f'  ✅ {m}')
+                  print(f'  OK {m}')
               except Exception as e:
-                  print(f'  ❌ {m}: {type(e).__name__}: {e}')
-                  traceback.print_exc()
-                  failed.append((m, type(e).__name__, str(e)))
-          if failed:
-              print(f'\\n{len(failed)}/{len(modules)} 个模块导入失败')
-              sys.exit(1)
-          print(f'\\n全部 {len(modules)} 个模块导入成功')
-          " 2>&1 | tee python-import.log
-          PY_EXIT=${PIPESTATUS[0]}
-          set -e
-          if [ $PY_EXIT -ne 0 ]; then
-            while IFS= read -r line; do
-              if [[ "$line" =~ ^\ \ ❌ ]]; then
-                echo "::error::python: $line"
-              elif [[ "$line" =~ ^Traceback ]]; then
-                echo "::error::python traceback: $line"
-              elif [[ "$line" =~ ^File\ |^[A-Za-z_].*Error: ]]; then
-                echo "::error::python detail: $line"
-              fi
-            done < python-import.log
-            exit $PY_EXIT
-          fi
+                  print(f'  FAIL {m}: {type(e).__name__}: {e}')
+                  import traceback; traceback.print_exc()
+                  sys.exit(1)
+          print(f'全部 {len(modules)} 个模块导入成功')
+          "
 
   # ============ 2. Rust / Tauri 编译验证 ============
   rust-lint:
