@@ -100,4 +100,4 @@ logs/
 .workbuddy/
 
 # ==================== Tauri ====================
-tauri.conf.json.example
+tauri.conf.json.exampledata/
