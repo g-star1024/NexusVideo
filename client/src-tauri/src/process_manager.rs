@@ -525,7 +525,8 @@ fn comfyui_env() -> HashMap<String, String> {
 }
 
 // 逐行读 stdout/stderr，emit backend://log 事件给前端
-fn spawn_log_reader(app: &AppHandle, source: &str, pipe: tokio::process::ChildStdout, level: &str) {
+// 参数 pipe 接受 ChildStdout 或 ChildStderr（两者都实现了 AsyncRead）
+fn spawn_log_reader(app: &AppHandle, source: &str, pipe: impl tokio::io::AsyncRead + Send + 'static, level: &str) {
     let source = source.to_string();
     let level = level.to_string();
     let app = app.clone();
