@@ -22,7 +22,7 @@ use nexusvideo_client_lib::commands;
 use nexusvideo_client_lib::crash_handler;
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -84,7 +84,8 @@ pub fn run() {
                 if let Some(state) = handle.try_state::<AppState>() {
                     tauri::async_runtime::block_on(async move {
                         // 1) 通知前端正在退出
-                        let _ = handle.emit(
+                        let _ = tauri::Emitter::emit(
+                            &handle,
                             nexusvideo_client_lib::events::event_name::BACKEND_STATUS,
                             serde_json::json!({"message": "应用退出，正在停止后端..."}),
                         );
