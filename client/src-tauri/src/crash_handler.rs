@@ -194,9 +194,9 @@ pub fn install_panic_hook(app: AppHandle) {
 
 /// 前端可调用此 IPC 命令重载自身（崩溃恢复）
 #[tauri::command]
-pub fn reload_frontend(window: tauri::Window) {
+pub fn reload_frontend(window: tauri::WebviewWindow) {
     log::warn!("[crash_handler] 前端请求重载");
-    window.eval("location.reload()").ok();
+    let _ = window.eval("location.reload()", ());
 }
 
 /// 前端可调用此 IPC 命令获取崩溃日志列表
