@@ -18,18 +18,18 @@ name = "nexusvideo_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.0.4", features = [] }
 
 [dependencies]
-# ---- Tauri 核心 (v2) ----
-tauri = { version = "2", features = ["devtools"] }
-tauri-plugin-shell = "2"      # 预留：外部命令 / 浏览器拉起
-tauri-plugin-dialog = "2"     # 文件选择对话框（图生视频上传）
-tauri-plugin-fs = "2"         # 本地文件读写（配置/历史记录）
-tauri-plugin-process = "2"    # 应用进程控制（退出/重启）
-tauri-plugin-http = "2"       # 云端 API 转发
-tauri-plugin-updater = "2"    # 自动更新 (Task #13)
-tauri-plugin-log = "2"        # 日志落盘
+# ---- Tauri 核心 (v2) — 锁定版本避免无 Cargo.lock 时解析到 breaking change 版本 ----
+tauri = { version = "2.0.4", features = ["devtools"] }
+tauri-plugin-shell = "2.0.1"
+tauri-plugin-dialog = "2.0.3"
+tauri-plugin-fs = "2.0.1"
+tauri-plugin-process = "2.0.1"
+tauri-plugin-http = "2.0.1"
+tauri-plugin-updater = "2.0.2"
+tauri-plugin-log = "2.0.1"
 
 # ---- 序列化 ----
 serde = { version = "1", features = ["derive"] }
