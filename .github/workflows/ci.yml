@@ -69,8 +69,17 @@ jobs:
       - name: 验证 FastAPI 路由导入
         run: |
           python -c "
-          import sys, pathlib, importlib
+          import sys, pathlib, importlib, traceback, os
           sys.path.insert(0, str(pathlib.Path('backend').resolve()))
+
+          # 打印依赖版本以便排查
+          for pkg in ['websockets', 'bcrypt', 'httpx', 'fastapi', 'pydantic']:
+              try:
+                  mod = importlib.import_module(pkg)
+                  print(f'  [dep] {pkg}=={getattr(mod, \"__version__\", \"unknown\")}')
+              except ImportError as e:
+                  print(f'  [dep] {pkg}: NOT INSTALLED - {e}')
+
           modules = [
               'core.auth', 'core.comfyui_client', 'core.comfyui_ws',
               'core.inference_router', 'core.progress_translator',
@@ -79,14 +88,20 @@ jobs:
               'routers.progress', 'routers.system', 'routers.task', 'routers.upload',
               'config', 'exceptions', 'local_server'
           ]
+          failed = []
           for m in modules:
               try:
                   importlib.import_module(m)
                   print(f'  ✅ {m}')
               except Exception as e:
-                  print(f'  ❌ {m}: {e}')
-                  sys.exit(1)
-          print(f'\n全部 {len(modules)} 个模块导入成功')
+                  print(f'  ❌ {m}: {type(e).__name__}: {e}')
+                  traceback.print_exc()
+                  failed.append((m, type(e).__name__, str(e)))
+
+          if failed:
+              print(f'\\n{len(failed)}/{len(modules)} 个模块导入失败，详细错误见上方 traceback')
+              sys.exit(1)
+          print(f'\\n全部 {len(modules)} 个模块导入成功')
           "
 
   # ============ 2. Rust / Tauri 编译验证 ============
@@ -128,7 +143,24 @@ jobs:
       - name: 编译 Rust 代码（不含 Tauri 打包）
         run: |
           cd client/src-tauri
-          cargo check --workspace
+          echo "=== Rust 环境信息 ==="
+          rustc --version
+          cargo --version
+          echo ""
+          echo "=== Cargo.toml 内容 ==="
+          cat Cargo.toml
+          echo ""
+          echo "=== 开始 cargo check ==="
+          RUST_BACKTRACE=1 cargo check --workspace 2>&1 | tee cargo-check.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo ""
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "=== cargo check 失败（exit code=$EXIT_CODE）==="
+            echo "=== 最后 50 行日志 ==="
+            tail -50 cargo-check.log
+            exit $EXIT_CODE
+          fi
         timeout-minutes: 15
 
   # ============ 3. TypeScript / Vue 检查 ============
