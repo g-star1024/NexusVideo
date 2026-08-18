@@ -67,11 +67,40 @@ jobs:
           "
 
       - name: 验证 FastAPI 路由导入
+        env:
+          PYTHONPATH: backend
         run: |
           set +e
+          echo "=== sys.path 调试 ==="
+          python -c "import sys; print('\n'.join(sys.path[:10]))"
+          echo "=== models 目录 ==="
+          ls -la backend/models/
           python -c "
           import sys, pathlib, importlib, traceback, os
-          sys.path.insert(0, str(pathlib.Path('backend').resolve()))
+          # 双重保险：同时添加 backend 绝对路径
+          backend_abs = str(pathlib.Path('backend').resolve())
+          if backend_abs not in sys.path:
+              sys.path.insert(0, backend_abs)
+          print(f'sys.path[0] = {sys.path[0]}')
+          # 先测试 models 能否导入
+          try:
+              import models
+              print(f'  [dep] models package found at: {models.__file__}')
+          except ImportError as e:
+              print(f'  [dep] models NOT FOUND: {e}')
+              # 尝试直接导入 schemas
+              try:
+                  import models.schemas
+                  print(f'  [dep] models.schemas found: {models.schemas.__file__}')
+              except ImportError as e2:
+                  print(f'  [dep] models.schemas NOT FOUND: {e2}')
+                  # 打印目录内容
+                  models_dir = pathlib.Path('backend/models')
+                  print(f'  [dep] backend/models/ exists: {models_dir.exists()}')
+                  if models_dir.exists():
+                      for f in models_dir.iterdir():
+                          print(f'  [dep]   {f.name}')
+              sys.exit(1)
           for pkg in ['websockets', 'bcrypt', 'httpx', 'fastapi', 'pydantic']:
               try:
                   mod = importlib.import_module(pkg)
@@ -103,7 +132,6 @@ jobs:
           PY_EXIT=${PIPESTATUS[0]}
           set -e
           if [ $PY_EXIT -ne 0 ]; then
-            # 写入 GitHub annotations（API 可访问）
             while IFS= read -r line; do
               if [[ "$line" =~ ^\ \ ❌ ]]; then
                 echo "::error::python: $line"
