@@ -151,17 +151,31 @@ jobs:
           cat Cargo.toml
           echo ""
           echo "=== 开始 cargo check ==="
+          set +e
           RUST_BACKTRACE=1 cargo check --workspace 2>&1 | tee cargo-check.log
           EXIT_CODE=${PIPESTATUS[0]}
+          set -e
           echo ""
           if [ $EXIT_CODE -ne 0 ]; then
             echo ""
             echo "=== cargo check 失败（exit code=$EXIT_CODE）==="
-            echo "=== 最后 50 行日志 ==="
-            tail -50 cargo-check.log
+            echo ""
+            echo "=== 错误详情（error: 开头的行）==="
+            grep -E "^error|^  -->" cargo-check.log || true
+            echo ""
+            echo "=== 最后 100 行日志 ==="
+            tail -100 cargo-check.log
             exit $EXIT_CODE
           fi
         timeout-minutes: 15
+
+      - name: 上传 cargo 日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-check-log
+          path: client/src-tauri/cargo-check.log
+          if-no-files-found: ignore
 
   # ============ 3. TypeScript / Vue 检查 ============
   frontend-check:
