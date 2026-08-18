@@ -615,11 +615,13 @@ async fn probe_ws(host: &str, port: u16, path: &str) -> bool {
 }
 
 /// 获取进程的内存/CPU 使用率（使用 sysinfo）
+/// 注意：sysinfo >= 0.30 已移除所有 trait（ProcessExt/SystemExt/SystemExt），
+/// 方法直接在 Process/System 类型上调用，无需 import trait。
 async fn fetch_process_stats(
     comfyui: &Arc<Mutex<ManagedProcess>>,
     fastapi: &Arc<Mutex<ManagedProcess>>,
 ) {
-    use sysinfo::{ProcessExt, System, SystemExt};
+    use sysinfo::System;
 
     let mut sys = System::new_all();
     sys.refresh_processes();

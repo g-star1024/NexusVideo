@@ -13,14 +13,14 @@ pydantic-settings==2.3.4           # 配置管理
 httpx==0.27.0                       # 异步 HTTP 客户端，支持 HTTP/2
 
 # === WebSocket（对接 ComfyUI 实时进度） ===
-websockets>=13.0                   # ComfyUI ws:// 进度推送（≥13.0 修复 12.x 平台兼容问题）
+websockets==14.1                   # ComfyUI ws:// 进度推送（v14 修复 v12.x 平台兼容问题）
 
 # === 进程管理 ===
-psutil==5.9.8                      # 进程查找、端口检测、系统资源监控
+psutil==6.1.0                      # 进程查找、端口检测、系统资源监控
 
 # === 工具 ===
 python-multipart==0.0.9            # 文件上传支持（图生视频）
 loguru==0.7.2                      # 结构化日志
 
 # === P2 阶段 — 用户认证 ===
-bcrypt>=4.2.0                       # 密码哈希（bcrypt + 自动加盐；≥4.2 wheel 兼容性更好）
+bcrypt==4.2.1                       # 密码哈希（bcrypt + 自动加盐）
