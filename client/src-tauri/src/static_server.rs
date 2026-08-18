@@ -49,7 +49,7 @@ impl StaticServer {
 
         let app_for_spawn = app.clone();
         let accept_handle = tokio::spawn(async move {
-            let mut recv = listener;
+            let recv = listener;
             loop {
                 match recv.accept().await {
                     Ok((stream, _peer)) => {
@@ -131,10 +131,8 @@ async fn handle_request(
     _app: AppHandle,
 ) {
     let mut buf = [0u8; 8192];
-    let n = match {
-        use tokio::io::AsyncReadExt;
-        stream.read(&mut buf).await
-    } {
+    use tokio::io::AsyncReadExt;
+    let n = match stream.read(&mut buf).await {
         Ok(n) => n,
         Err(_) => return,
     };
