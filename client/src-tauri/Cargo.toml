@@ -92,6 +92,15 @@ panic = "abort"        # panic 直接终止（桌面端不靠 unwind 恢复）
 [target.'cfg(windows)'.dependencies]
 # Windows 资源嵌入（版本号、图标等）
 winres = "0.1"
+# Windows 磁盘空间查询 API（file_manager.rs 使用 GetDiskFreeSpaceExW）
+winapi = { version = "0.3", features = ["fileapi", "minwindef"] }
+
+# ============================================================================
+# Unix 专用配置
+# ============================================================================
+[target.'cfg(unix)'.dependencies]
+# Unix 进程组管理（process_manager.rs 使用 libc::setsid()）
+libc = "0.2"
 
 # ============================================================================
 # macOS 专用配置
