@@ -15,7 +15,7 @@
         <div class="queue-bar">
           <div
             class="queue-bar-fill"
-            :style="{ width: `${Math.min(position / maxQueue * 100, 100)}%` }"
+            :style="{ width: `${Math.min(position / (maxQueue ?? 20) * 100, 100)}%` }"
           />
         </div>
         <div class="queue-subtitle">
@@ -44,6 +44,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
+
 /**
  * QueueStatus — 云端模式下的排队状态展示
  *

@@ -116,7 +116,7 @@ export function useProgress() {
   const currentText = ref<string>('正在构思画面…');
   const currentPhase = ref<number>(0);
   const currentProgress = ref<number>(0);
-  const remainingSeconds = ref<number | null>(null);
+  const remainingSeconds = ref<number | string | null>(null);
   const isCrossfading = ref<boolean>(false);
   const connectionState = ref<'idle' | 'connecting' | 'ws_connected' | 'polling' | 'disconnected'>('idle');
 

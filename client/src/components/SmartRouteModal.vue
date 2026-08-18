@@ -118,6 +118,8 @@
 </template>
 
 <script setup lang="ts">
+import { ref, computed } from 'vue';
+
 /**
  * SmartRouteModal — 显存不足时自动弹窗推荐云端
  *

@@ -11,7 +11,7 @@
         :class="{ active: modelValue }"
         @click="toggle"
         :aria-label="modelValue ? '关闭云端模式' : '开启云端模式'"
-        :aria-checked="String(modelValue)"
+        :aria-checked="modelValue"
       >
         <span class="toggle-thumb" />
         <span v-if="modelValue" class="toggle-indicator indicator-on">

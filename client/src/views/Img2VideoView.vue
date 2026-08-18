@@ -49,11 +49,7 @@ watch(() => store.state, (ns) => {
   if (ns === 'generating') progress.startCycle();
   else { progress.stopCycle(); progress.reset(); }
 });
-watch(() => store.currentProgress, (cp) => {
-  if (!cp.taskStatus) return;
-  progress.updateProgress(cp.taskStatus.progress);
-  progress.updatePhase(cp.phase);
-}, { deep: true });
+// progress 由 useProgress 内部通过 WebSocket 自动更新，无需额外 watch
 
 const estimatedText = computed(() => formatRemainingText(progress.remainingSeconds.value ?? null));
 
