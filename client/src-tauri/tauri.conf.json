@@ -4,6 +4,9 @@
   "productName": "NexusVideo",
   "version": "0.1.0",
   "identifier": "com.nexusvideo.client",
+  "homepage": "https://nexusvideo.ai",
+  "author": "NexusVideo Team",
+  "description": "面向小白的 AI 视频生成桌面软件",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -34,9 +37,10 @@
 
   "plugins": {
     "updater": {
+      "active": true,
       "endpoints": ["https://releases.nexusvideo.com/update.json"],
       "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6...",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IGZn...",
       "windows": {
         "installMode": "passive"
       }
@@ -74,7 +78,7 @@
     "longDescription": "面向小白的 AI 视频生成桌面软件，一句话出片。基于 ComfyUI 引擎，支持文生视频、图生视频，零配置开箱即用。",
 
     "windows": {
-      "certificateThumbprint": null,
+      "certificateThumbprint": "<PLACEHOLDER:OV_CERT_THUMBPRINT>",
       "digestAlgorithm": "sha256",
       "timestampUrl": "http://timestamp.digicert.com",
       "webviewInstallMode": {
@@ -94,8 +98,9 @@
       "frameworks": [],
       "minimumSystemVersion": "12.0",
       "exceptionDomain": "com.nexusvideo.client",
-      "signingIdentity": "-",
+      "signingIdentity": "<PLACEHOLDER:Developer ID Application>",
       "entitlements": "entitlements.plist",
+      "hardenedRuntime": true,
       "dmg": {
         "background": "icons/dmg-background.png",
         "windowSize": { "width": 600, "height": 400 }

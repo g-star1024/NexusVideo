@@ -1,0 +1,468 @@
+name: NexusVideo Build & Release
+
+# 触发条件：
+#   1. push 到 main 分支 → 执行 CI 检查 + 构建测试包
+#   2. 手动触发 (workflow_dispatch) → 可指定版本号
+#   3. 创建 Git tag (v*) → 执行完整打包 + 签名 + GitHub Release
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号 (如 0.1.0, 留空自动从 tauri.conf.json 读取)"
+        required: false
+        type: string
+      sign_windows:
+        description: "Windows 签名"
+        required: false
+        default: false
+        type: boolean
+      sign_macos:
+        description: "macOS 签名 + 公证"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # 构建产物前缀（版本号从 tag 或 tauri.conf.json 自动获取）
+  APP_NAME: NexusVideo
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ================================================================
+  # 1. 前置检查 (所有 ref 共享)
+  # ================================================================
+  preflight:
+    name: 前置检查
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 确定版本号
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=$(python3 -c "import json; print(json.load(open('client/src-tauri/tauri.conf.json'))['version'])")
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "版本号: $VERSION"
+
+      - name: 验证版本号一致性
+        shell: bash
+        run: |
+          TAUARI_VER=$(python3 -c "import json; print(json.load(open('client/src-tauri/tauri.conf.json'))['version'])")
+          PKG_VER=$(python3 -c "import json; print(json.load(open('client/package.json'))['version'])")
+          CARGO_VER=$(grep '^version' client/src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "tauri.conf.json: $TAUARI_VER"
+          echo "package.json:    $PKG_VER"
+          echo "Cargo.toml:      $CARGO_VER"
+          if [[ "$TAUARI_VER" != "$PKG_VER" || "$TAUARI_VER" != "$CARGO_VER" ]]; then
+            echo "::error::版本号不一致! 请同步更新 tauri.conf.json / package.json / Cargo.toml"
+            exit 1
+          fi
+
+  # ================================================================
+  # 2. 前端构建 (所有 ref 共享)
+  # ================================================================
+  frontend-build:
+    name: 前端构建
+    runs-on: ubuntu-22.04
+    needs: [preflight]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "client/package-lock.json"
+
+      - name: 安装依赖
+        run: cd client && npm ci
+        timeout-minutes: 10
+
+      - name: 类型检查
+        run: cd client && npx vue-tsc --noEmit
+        timeout-minutes: 5
+
+      - name: 构建
+        run: cd client && npm run build
+        timeout-minutes: 10
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist/
+          if-no-files-found: error
+
+  # ================================================================
+  # 3. Windows 打包 (tag 触发 + 手动触发)
+  # ================================================================
+  build-windows:
+    name: Windows 打包 (.exe)
+    runs-on: windows-latest
+    needs: [preflight, frontend-build]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "client/package-lock.json"
+
+      - name: 安装系统依赖
+        run: |
+          # WebView2 Runtime (Tauri v2 需要)
+          # Windows-latest runner 通常已预装，此处仅确认
+          if (Test-Path "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe") {
+            Write-Host "Edge/WebView2 已安装"
+          }
+
+      - name: 安装前端
+        run: cd client && npm ci
+        timeout-minutes: 10
+
+      - name: 构建前端
+        run: cd client && npm run build
+        timeout-minutes: 10
+
+      - name: 安装 Tauri CLI
+        shell: bash
+        run: cargo install tauri-cli --version "^2.0"
+
+      - name: 构建 Tauri (Windows)
+        shell: bash
+        run: |
+          cd client/src-tauri
+          cargo tauri build --target x86_64-pc-windows-msvc
+        timeout-minutes: 25
+
+      - name: 签名 (Windows EV)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event.inputs.sign_windows == 'true' }}
+        env:
+          NEXUS_SIGN_CERT_PATH: ${{ secrets.NEXUS_SIGN_CERT_PATH }}
+          NEXUS_SIGN_PASSWORD: ${{ secrets.NEXUS_SIGN_PASSWORD }}
+        shell: powershell
+        run: |
+          if (-not $env:NEXUS_SIGN_CERT_PATH -or -not $env:NEXUS_SIGN_PASSWORD) {
+            Write-Host "[SKIP] 签名凭据未配置，跳过签名" -ForegroundColor Yellow
+            exit 0
+          }
+
+          $CERT_PATH = "${{ secrets.NEXUS_SIGN_CERT_PATH }}"
+          $EXE_PATTERN = "target/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64-setup.exe"
+
+          if (Test-Path $EXE_PATTERN) {
+            $securePwd = ConvertTo-SecureString $env:NEXUS_SIGN_PASSWORD -AsPlainText -Force
+            signtool sign /fd SHA256 /f $CERT_PATH /p $securePwd `
+              /tr http://timestamp.digicert.com /td SHA256 `
+              $EXE_PATTERN
+            signtool verify /pa /v $EXE_PATTERN
+            Write-Host "[OK] Windows 签名完成" -ForegroundColor Green
+          } else {
+            Write-Host "[WARN] 找不到 .exe 文件: $EXE_PATTERN" -ForegroundColor Yellow
+          }
+
+      - name: 生成 SHA256
+        shell: bash
+        run: |
+          EXE_PATH="client/src-tauri/target/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64-setup.exe"
+          if [ -f "$EXE_PATH" ]; then
+            sha256sum "$EXE_PATH" > "$EXE_PATH.sha256"
+            echo "SHA256: $(cat "$EXE_PATH.sha256")"
+          fi
+
+      - name: 上传 Windows 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexusvideo-windows-${{ needs.preflight.outputs.version }}
+          path: client/src-tauri/target/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64*
+          if-no-files-found: error
+
+  # ================================================================
+  # 4. macOS 打包 (tag 触发 + 手动触发)
+  # ================================================================
+  build-macos:
+    name: macOS 打包 (.dmg)
+    runs-on: macos-14
+    needs: [preflight, frontend-build]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 40
+    strategy:
+      matrix:
+        arch: [x64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "client/package-lock.json"
+
+      - name: 安装 Xcode Command Line Tools
+        run: xcode-select --install || true
+
+      - name: 安装前端
+        run: cd client && npm ci
+        timeout-minutes: 10
+
+      - name: 构建前端
+        run: cd client && npm run build
+        timeout-minutes: 10
+
+      - name: 安装 Tauri CLI
+        run: cargo install tauri-cli --version "^2.0"
+
+      - name: 设置架构目标
+        id: arch_target
+        shell: bash
+        run: |
+          if [ "${{ matrix.arch }}" == "aarch64" ]; then
+            echo "cargo_target=aarch64-apple-darwin" >> "$GITHUB_OUTPUT"
+            echo "dmg_suffix=aarch64" >> "$GITHUB_OUTPUT"
+          else
+            echo "cargo_target=x86_64-apple-darwin" >> "$GITHUB_OUTPUT"
+            echo "dmg_suffix=x64" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 构建 Tauri (macOS ${{ matrix.arch }})
+        shell: bash
+        run: |
+          cd client/src-tauri
+          rustup target add ${{ steps.arch_target.outputs.cargo_target }}
+          cargo tauri build --target ${{ steps.arch_target.outputs.cargo_target }}
+        timeout-minutes: 30
+
+      - name: 签名 + 公证 (macOS Developer ID)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event.inputs.sign_macos == 'true' }}
+        env:
+          NEXUS_TEAM_ID: ${{ secrets.NEXUS_TEAM_ID }}
+          NEXUS_APPLE_ID: ${{ secrets.NEXUS_APPLE_ID }}
+          NEXUS_APP_PASSWORD: ${{ secrets.NEXUS_APP_PASSWORD }}
+          NEXUS_SIGN_IDENTITY: ${{ secrets.NEXUS_SIGN_IDENTITY }}
+        shell: bash
+        run: |
+          if [ -z "$NEXUS_TEAM_ID" ] || [ -z "$NEXUS_APPLE_ID" ] || [ -z "$NEXUS_APP_PASSWORD" ]; then
+            echo "[SKIP] macOS 签名凭据未配置，跳过签名 + 公证"
+            exit 0
+          fi
+
+          DMG_PATTERN="target/${{ steps.arch_target.outputs.cargo_target }}/release/bundle/dmg/NexusVideo_${{ needs.preflight.outputs.version }}_${{ steps.arch_target.outputs.dmg_suffix }}.dmg"
+          APP_PATH="target/${{ steps.arch_target.outputs.cargo_target }}/release/bundle/NexusVideo.app"
+
+          if [ ! -f "$DMG_PATTERN" ] && [ ! -f "target/release/bundle/dmg/NexusVideo_${{ needs.preflight.outputs.version }}_${{ steps.arch_target.outputs.dmg_suffix }}.dmg" ]; then
+            echo "[WARN] 找不到 DMG 文件，尝试查找..."
+            find target -name "*.dmg" -type f || true
+            exit 0
+          fi
+
+          # 定位实际 DMG 路径
+          DMG_FILE=$(find target -name "*.dmg" -type f | head -1)
+          if [ -z "$DMG_FILE" ]; then
+            echo "[WARN] 未找到 DMG 文件，跳过签名"
+            exit 0
+          fi
+
+          # 存储 App-Specific Password
+          xcrun notarytool store-password "$NEXUS_APP_PASSWORD" \
+            --apple-id "$NEXUS_APPLE_ID" \
+            --label "NEXUS_APP_PASSWORD"
+
+          # 签名 .app（先找 app 包）
+          APP_FILE=$(dirname "$DMG_FILE")/NexusVideo.app
+          if [ -d "$APP_FILE" ]; then
+            codesign --deep --force --verify --verbose=2 \
+              --sign "$NEXUS_SIGN_IDENTITY" \
+              --options runtime \
+              "$APP_FILE"
+            echo "[OK] .app 签名完成"
+          fi
+
+          # 签名 DMG
+          codesign --force --sign "$NEXUS_SIGN_IDENTITY" "$DMG_FILE"
+          echo "[OK] DMG 签名完成"
+
+          # 公证
+          xcrun notarytool submit "$DMG_FILE" \
+            --apple-id "$NEXUS_APPLE_ID" \
+            --password "@keychain:NEXUS_APP_PASSWORD" \
+            --team-id "$NEXUS_TEAM_ID" \
+            --wait
+          echo "[OK] Notarization 完成"
+
+          # Stapling
+          if [ -d "$APP_FILE" ]; then
+            xcrun stapler staple "$APP_FILE"
+          fi
+          echo "[OK] Stapling 完成"
+
+      - name: 生成 SHA256
+        shell: bash
+        run: |
+          DMG_FILE=$(find client/src-tauri/target -name "*.dmg" -type f | head -1)
+          if [ -n "$DMG_FILE" ]; then
+            shasum -a 256 "$DMG_FILE" > "$DMG_FILE.sha256"
+            echo "SHA256: $(cat "$DMG_FILE.sha256")"
+          fi
+
+      - name: 上传 macOS 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexusvideo-macos-${{ matrix.arch }}-${{ needs.preflight.outputs.version }}
+          path: |
+            client/src-tauri/target/**/NexusVideo_${{ needs.preflight.outputs.version }}_${{ steps.arch_target.outputs.dmg_suffix }}*
+            client/src-tauri/target/**/NexusVideo.app
+          if-no-files-found: warn
+
+  # ================================================================
+  # 5. 生成 Tauri Update Manifest
+  # ================================================================
+  generate-manifest:
+    name: 生成 Update Manifest
+    runs-on: ubuntu-22.04
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: 生成 update.json
+        shell: bash
+        run: |
+          VERSION="${{ needs.preflight.outputs.version }}"
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # 计算 SHA256
+          WIN_SHA=$(find artifacts/ -name "*.exe.sha256" -exec cat {} \; | awk '{print $1}')
+          MAC_X64_SHA=$(find artifacts/ -name "*x64*.dmg.sha256" -exec cat {} \; | awk '{print $1}')
+          MAC_ARM_SHA=$(find artifacts/ -name "*aarch64*.dmg.sha256" -exec cat {} \; | awk '{print $1}')
+
+          cat > update.json << EOF
+          {
+            "version": "$VERSION",
+            "date": "$DATE",
+            "pub_date": "$DATE",
+            "platforms": {
+              "windows-x86_64": {
+                "url": "https://releases.nexusvideo.com/NexusVideo_${VERSION}_x64-setup.exe",
+                "sha256": "$WIN_SHA"
+              },
+              "darwin-x86_64": {
+                "url": "https://releases.nexusvideo.com/NexusVideo_${VERSION}_x64.dmg",
+                "sha256": "$MAC_X64_SHA"
+              },
+              "darwin-aarch64": {
+                "url": "https://releases.nexusvideo.com/NexusVideo_${VERSION}_aarch64.dmg",
+                "sha256": "$MAC_ARM_SHA"
+              }
+            },
+            "body": "请查看 [GitHub Release Notes](https://github.com/NexusVideo/NexusVideo/releases/tag/v${VERSION})"
+          }
+          EOF
+
+          echo "=== update.json ==="
+          cat update.json
+
+      - name: 上传 Update Manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-manifest
+          path: update.json
+          if-no-files-found: error
+
+  # ================================================================
+  # 6. GitHub Release (仅 tag 触发)
+  # ================================================================
+  github-release:
+    name: 创建 GitHub Release
+    runs-on: ubuntu-22.04
+    needs: [build-windows, build-macos, generate-manifest]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: 创建 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        shell: bash
+        run: |
+          RELEASE_NOTES="## NexusVideo v${VERSION}\n\n发布日期: $(date -u +%Y-%m-%d)\n\n### 下载\n\n- Windows: NexusVideo_${VERSION}_x64-setup.exe\n- macOS Intel: NexusVideo_${VERSION}_x64.dmg\n- macOS ARM: NexusVideo_${VERSION}_aarch64.dmg\n\n### 更新说明\n\n详见 [Release Notes](https://github.com/NexusVideo/NexusVideo/releases/tag/v${VERSION})"
+
+          gh release create "v${VERSION}" \
+            --title "NexusVideo v${VERSION}" \
+            --notes "$RELEASE_NOTES" \
+            --verify-tag \
+            artifacts/**/*
+
+          echo "[OK] GitHub Release 已创建: v${VERSION}"
+
+  # ================================================================
+  # 7. 汇总 (CI only, 非 tag 触发时)
+  # ================================================================
+  ci-summary:
+    name: 📋 CI 汇总
+    runs-on: ubuntu-22.04
+    needs: [preflight, frontend-build, build-windows, build-macos]
+    if: always() && !startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: 汇总报告
+        run: |
+          echo "======================================"
+          echo " NexusVideo Build & Release 汇总"
+          echo "======================================"
+          echo " Version: ${{ needs.preflight.outputs.version }}"
+          echo " Branch:  ${{ github.ref_name }}"
+          echo ""
+          echo " ✅ 前置检查:    ${{ needs.preflight.result }}"
+          echo " ✅ 前端构建:    ${{ needs.frontend-build.result }}"
+          echo " ✅ Windows 打包: ${{ needs.build-windows.result }}"
+          echo " ✅ macOS 打包:   ${{ needs.build-macos.result }}"
+          echo ""
+          echo "产物已上传到 Artifacts 页面"

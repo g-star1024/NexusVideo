@@ -70,10 +70,7 @@ pub async fn check_for_updates(app: AppHandle) {
     let current_version = app.package_info().version.to_string();
 
     log::info!(
-        "[auto_update] 发现新版本: {} → {} (当前: {})",
-        new_version,
-        current_version,
-        new_version,
+        "[auto_update] 发现新版本: 当前 {current_version} → 新 {new_version}",
     );
 
     // 通知前端展示更新提示弹窗

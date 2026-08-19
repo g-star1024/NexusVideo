@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ==================================================================== -->
+    <!-- NexusVideo macOS Entitlements                                        -->
+    <!-- 对应 tauri.conf.json: "entitlements": "entitlements.plist"          -->
+    <!-- 启用 Hardened Runtime 所需的权限声明                                 -->
+    <!-- ==================================================================== -->
+
+    <!-- 允许应用沙箱 (可选，NexusVideo 不启用完整沙箱以支持 GPU 访问) -->
+    <!-- <key>com.apple.security.app-sandbox</key><true/> -->
+
+    <!-- 网络访问：允许客户端连接云端 API + 自动更新服务器 -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- 允许监听网络端口（本地 ComfyUI + FastAPI 子进程通信） -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- 允许读取用户选择的文件（上传图片/参考图） -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- 允许访问下载目录（保存生成的视频） -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+
+    <!-- 允许访问 Pictures 目录（用户图片库） -->
+    <key>com.apple.security.files.pictures.read-write</key>
+    <true/>
+
+    <!-- 允许访问 Movies 目录（生成的视频保存位置） -->
+    <key>com.apple.security.files.movies.read-write</key>
+    <true/>
+
+    <!-- 允许 GPU 加速（ComfyUI 子进程使用 GPU） -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+
+    <!-- 允许辅助功能（截图功能备用） -->
+    <key>com.apple.security.device.screen_capture</key>
+    <true/>
+
+    <!-- 允许 DTrace（调试用，发布版本可移除） -->
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+
+    <!-- 允许 Mach 端口（子进程间通信） -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- 允许动态代码签名（ComfyUI Python 运行时加载） -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

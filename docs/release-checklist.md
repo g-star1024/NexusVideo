@@ -1,6 +1,42 @@
-# NexusVideo 发布检查清单
+# NexusVideo MVP Release Checklist
 
 > 版本: 0.1.0 | 更新日期: 2026-08-18 | 负责人: 封易安 (client-tauri-dev)
+
+---
+
+## 发布前（Pre-release）
+
+- [ ] Rust 编译通过：`cargo check --workspace`
+- [ ] TypeScript 编译通过：`npm run build`
+- [ ] 工作流模板验证：`python validate_workflow.py`
+- [ ] Wan2.1 1.3B 模型已就位
+- [ ] 本地集成测试通过（3步出视频端到端）
+- [ ] 版本号更新（tauri.conf.json + package.json + Cargo.toml 三处一致）
+- [ ] Changelog 已撰写
+
+## 打包（Build）
+
+- [ ] Windows .exe 打包完成
+- [ ] Windows .exe 代码签名（OV Code Signing）
+- [ ] macOS .dmg 打包完成（x64 + aarch64）
+- [ ] macOS .dmg 代码签名（Developer ID）+ Notarization
+- [ ] 安装包大小确认（< 500MB 不含模型）
+- [ ] Tauri Update Manifest (`update.json`) 生成
+
+## 发布（Release）
+
+- [ ] GitHub Release 创建（tag + changelog）
+- [ ] 自动更新服务端部署（OSS/GitHub Releases）
+- [ ] CDN 预热完成
+- [ ] 内测用户安装包分发
+- [ ] 内测用户反馈收集（3天观察期）
+
+## 发布后（Post-release）
+
+- [ ] 监控告警确认运行正常
+- [ ] 崩溃上报服务确认正常
+- [ ] 首次生成成功率统计
+- [ ] 社区/用户渠道公告
 
 ---
 
