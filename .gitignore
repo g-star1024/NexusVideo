@@ -105,3 +105,4 @@ logs/
 
 # ==================== Tauri ====================
 tauri.conf.json.exampledata/
+*.pyc
