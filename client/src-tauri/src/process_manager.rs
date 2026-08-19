@@ -175,7 +175,10 @@ impl ProcessManager {
                     p.cpu_percent = None;
                 }
                 emit_status(app);
-                log::warn!("[{}] 第 {}/{attempt} 次尝试重启...", spec.program, attempt, max_attempts);
+                log::warn!("[{proc_name}] 第 {attempt}/{max_attempts} 次尝试重启...",
+                    proc_name = proc_arc.lock().await.name,
+                    attempt = attempt,
+                    max_attempts = max_attempts);
                 tokio::time::sleep(Duration::from_secs(RESTART_DELAY_SECS)).await;
             }
 
@@ -272,7 +275,7 @@ impl ProcessManager {
         let stderr = child.stderr.take();
         let name = {
             let mut p = proc_arc.lock().await;
-            p.pid = pid;
+            p.pid = Some(pid);
             p.started_at = Some(Instant::now());
             p.child = Some(child);
             p.name.clone()

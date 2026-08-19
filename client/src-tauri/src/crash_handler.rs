@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::paths::config_dir;
+use crate::paths::log_dir;
 use tauri::{AppHandle, Emitter};
 
 // ---- 事件常量 ----
@@ -79,7 +79,7 @@ impl CrashRecord {
 
 /// 获取崩溃日志存储目录
 fn crash_dir() -> std::io::Result<PathBuf> {
-    let base = config_dir()?;
+    let base = log_dir()?;
     let crash_path = base.join("crash_reports");
     fs::create_dir_all(&crash_path)?;
     Ok(crash_path)
