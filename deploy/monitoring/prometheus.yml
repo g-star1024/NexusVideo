@@ -1,0 +1,137 @@
+# Prometheus 采集配置 — NexusVideo 生产环境
+# 挂载路径：deploy/monitoring/prometheus.yml → /etc/prometheus/prometheus.yml
+#
+# 采集目标：
+#   1. FastAPI 应用指标（/metrics 端点）
+#   2. Redis 队列长度
+#   3. Nginx 流量指标（nginx-vts-exporter）
+#   4. GPU 指标（DCGM exporter / nvidia-smi exporter）
+#   5. Node 系统指标（node_exporter）
+#   6. PostgreSQL 指标（postgres_exporter）
+#   7. ComfyUI 自定义指标
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# 告警规则加载
+rule_files:
+  - "/etc/prometheus/alerts.yml"
+
+# 远程写入（可选：写入阿里云 TSDB）
+# remote_write:
+#   - url: "http://tsdb-endpoint:9003/api/v1/write"
+
+# ---- 采集目标定义 ----
+scrape_configs:
+
+  # ============================================================
+  # 1. Prometheus 自身
+  # ============================================================
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: prometheus
+
+  # ============================================================
+  # 2. FastAPI 应用指标
+  #    FastAPI 需安装 prometheus-client 并暴露 /metrics 端点
+  # ============================================================
+  - job_name: "fastapi"
+    scrape_interval: 10s
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["fastapi:8000"]
+        labels:
+          service: fastapi
+          team: nexusvideo
+
+  # ============================================================
+  # 3. Redis 队列指标
+  #    使用 redis_exporter 暴露 Redis INFO 和队列长度
+  # ============================================================
+  - job_name: "redis"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          service: redis
+          team: nexusvideo
+
+  # ============================================================
+  # 4. Nginx 流量指标
+  #    使用 nginx-vts-exporter 采集 upstream 状态
+  # ============================================================
+  - job_name: "nginx"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["nginx-vts-exporter:9913"]
+        labels:
+          service: nginx
+          team: nexusvideo
+
+  # ============================================================
+  # 5. GPU 指标（DCGM / nvidia-smi exporter）
+  #    采集显存使用率、GPU 利用率、温度、功耗
+  # ============================================================
+  - job_name: "gpu"
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["dcgm-exporter:9400"]
+        labels:
+          service: gpu
+          team: nexusvideo
+      # 备用：nvidia-smi exporter（如果 DCGM 不可用）
+      - targets: ["nvidia-smi-exporter:9844"]
+        labels:
+          service: gpu-smi
+          team: nexusvideo
+
+  # ============================================================
+  # 6. Node 系统指标
+  # ============================================================
+  - job_name: "node"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: node
+          team: nexusvideo
+
+  # ============================================================
+  # 7. PostgreSQL 指标
+  # ============================================================
+  - job_name: "postgres"
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          service: postgres
+          team: nexusvideo
+
+  # ============================================================
+  # 8. ComfyUI 自定义指标
+  #    ComfyUI-Worker 暴露 /metrics 端点，包含：
+  #    - comfyui_gpu_memory_used_bytes
+  #    - comfyui_gpu_memory_total_bytes
+  #    - comfyui_tasks_processing
+  #    - comfyui_tasks_queue_length
+  #    - comfyui_task_duration_seconds
+  # ============================================================
+  - job_name: "comfyui"
+    scrape_interval: 10s
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["comfyui-worker:8188"]
+        labels:
+          service: comfyui
+          team: nexusvideo
+
+  # ============================================================
+  # 9. Alertmanager
+  # ============================================================
+  - job_name: "alertmanager"
+    static_configs:
+      - targets: ["alertmanager:9093"]

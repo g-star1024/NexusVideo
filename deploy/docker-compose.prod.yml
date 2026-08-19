@@ -1,0 +1,321 @@
+# NexusVideo MVP 生产环境 Docker Compose
+# ============================================================
+# 架构：客户端 → Nginx(网关) → FastAPI → Redis(队列) → ComfyUI-Worker(GPU)
+#                                    ↓
+#                                 PostgreSQL
+# ============================================================
+# 使用方法：
+#   1. 复制 .env.example 为 .env，填入密钥
+#   2. docker compose -f docker-compose.prod.yml up -d
+#   3. 首次启动后执行初始化：
+#      docker compose exec fastapi alembic upgrade head
+# ============================================================
+
+version: '3.8'
+
+# ---------- 共享网络 ----------
+networks:
+  nexusvideo-net:
+    driver: bridge
+  gpu-net:
+    driver: bridge
+    internal: false
+
+# ---------- 持久化 Volume ----------
+volumes:
+  postgres-data:
+    driver: local
+  postgres-backup:
+    driver: local
+  redis-data:
+    driver: local
+  comfyui-models:
+    driver: local
+  comfyui-outputs:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  nginx-certs:
+    driver: local
+  log-data:
+    driver: local
+
+# ---------- 服务定义 ----------
+services:
+
+  # ========================
+  # 1. Nginx 反向代理网关
+  # ========================
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: nexusvideo-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx-certs:/etc/nginx/ssl:ro
+      - log-data:/var/log/nginx
+    depends_on:
+      - fastapi
+    networks:
+      - nexusvideo-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ========================
+  # 2. FastAPI 主应用
+  # ========================
+  fastapi:
+    image: nexusvideo/fastapi:latest
+    container_name: nexusvideo-fastapi
+    restart: always
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_URL: postgresql+asyncpg://nvuser:nvpass@postgres:5432/nexusvideo
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?must provide JWT_SECRET_KEY}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      MAX_WORKERS: "4"
+      API_RATE_LIMIT: "30/minute"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app:ro
+      - log-data:/app/logs
+      - ../uploads:/app/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - nexusvideo-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ========================
+  # 3. Redis 任务队列 + 缓存
+  # ========================
+  redis:
+    image: redis:7-alpine
+    container_name: nexusvideo-redis
+    restart: always
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1g
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+    volumes:
+      - redis-data:/data
+    networks:
+      - nexusvideo-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ========================
+  # 4. PostgreSQL 数据库
+  # ========================
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexusvideo-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: nexusvideo
+      POSTGRES_USER: nvuser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?must provide POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - postgres-backup:/backups
+      - ./postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - nexusvideo-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nvuser -d nexusvideo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ========================
+  # 5. ComfyUI-Worker (GPU 推理节点)
+  # ========================
+  comfyui-worker:
+    image: nexusvideo/comfyui-worker:latest
+    container_name: nexusvideo-comfyui
+    restart: always
+    build:
+      context: ../workflows
+      dockerfile: Dockerfile.comfyui
+    env_file:
+      - .env
+    environment:
+      COMFYUI_API_PORT: "8188"
+      COMFYUI_LISTEN: "0.0.0.0"
+      REDIS_URL: redis://redis:6379/0
+      TASK_TIMEOUT: "600"
+      GPU_ALLOWLIST: "0,1,2,3"
+    # NVIDIA GPU runtime（关键：必须指定 runtime）
+    runtime: nvidia
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+          devices:
+            - driver: nvidia
+              device_ids: ['0', '1']
+              capabilities: [gpu]
+        reservations:
+          memory: 16G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - comfyui-models:/opt/ComfyUI/models
+      - comfyui-outputs:/opt/ComfyUI/output
+      - log-data:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - nexusvideo-net
+      - gpu-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8188/system_stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    # 并发上限：通过副本数控制 GPU 并发
+    # 生产环境建议 2-4 个副本
+    scale: 2
+
+  # ========================
+  # 6. Prometheus 指标采集
+  # ========================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: nexusvideo-prometheus
+    restart: always
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--storage.tsdb.retention.size=10GB"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - nexusvideo-net
+    depends_on:
+      - fastapi
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ========================
+  # 7. Grafana 监控看板
+  # ========================
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: nexusvideo-grafana
+    restart: always
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?must provide}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/nexusvideo-dashboard.json:ro
+      - ../monitoring/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - nexusvideo-net
+    depends_on:
+      - prometheus
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

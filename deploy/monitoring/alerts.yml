@@ -1,0 +1,337 @@
+# Prometheus 告警规则 — NexusVideo 生产环境
+# 挂载路径：deploy/monitoring/alerts.yml → /etc/prometheus/alerts.yml
+#
+# 告警级别定义：
+#   P0（Critical）→ 立即响应，15 分钟内解决
+#   P1（Warning） → 30 分钟内响应，4 小时内解决
+#   P2（Info）    → 下次值班时处理
+
+groups:
+
+  # ============================================================
+  # GPU 告警规则
+  # ============================================================
+  - name: gpu_alerts
+    interval: 15s
+
+    # P0: GPU 显存使用率 > 90% 持续 2 分钟
+    - alert: GPUHighMemoryUsage
+      expr: |
+        (nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes) * 100 > 90
+      for: 2m
+      labels:
+        severity: P0
+        service: gpu
+        team: nexusvideo
+      annotations:
+        summary: "GPU 显存使用率过高（{{ $value | humanizePercentage }}）"
+        description: |
+          节点 {{ $labels.instance }} 的 GPU（{{ $labels.gpu }}）显存使用率 {{ $value | humanizePercentage }}，
+          超过 90% 阈值持续 2 分钟。
+        runbook: "deploy/runbook.md#GPU显存溢出"
+        action: "立即检查 ComfyUI worker 显存占用，考虑释放低优先级任务或扩容"
+
+    # P0: GPU 利用率持续 0%（可能进程僵死）
+    - alert: GPUTotalIdleness
+      expr: |
+        nvidia_gpu_utilization == 0
+      for: 5m
+      labels:
+        severity: P0
+        service: gpu
+        team: nexusvideo
+      annotations:
+        summary: "GPU 利用率持续为 0%（可能进程僵死）"
+        description: |
+          节点 {{ $labels.instance }} 的 GPU 利用率持续 0% 超过 5 分钟。
+          可能存在进程僵死或未正确加载模型。
+        action: "检查 ComfyUI 进程状态，必要时重启 worker"
+
+    # P1: GPU 温度过高
+    - alert: GPUHighTemperature
+      expr: |
+        nvidia_gpu_temperature > 85
+      for: 3m
+      labels:
+        severity: P1
+        service: gpu
+        team: nexusvideo
+      annotations:
+        summary: "GPU 温度过高（{{ $value }}°C）"
+        description: "节点 {{ $labels.instance }} 的 GPU 温度达到 {{ $value }}°C，超过 85°C 阈值"
+        action: "检查散热/降频策略，考虑降低并发"
+
+    # P1: GPU 功耗超限制
+    - alert: GPUHighPower
+      expr: |
+        nvidia_gpu_power_usage > 150
+      for: 2m
+      labels:
+        severity: P1
+        service: gpu
+        team: nexusvideo
+      annotations:
+        summary: "GPU 功耗过高（{{ $value }}W）"
+        description: "节点 {{ $labels.instance }} 的 GPU 功耗达到 {{ $value }}W"
+        action: "检查是否运行高负载模型，考虑降低并发"
+
+  # ============================================================
+  # 任务队列告警规则
+  # ============================================================
+  - name: queue_alerts
+    interval: 15s
+
+    # P1: 任务队列长度 > 10 持续 1 分钟
+    - alert: TaskQueueBacklog
+      expr: |
+        redis_queue_length{queue="task_queue"} > 10
+      for: 1m
+      labels:
+        severity: P1
+        service: redis
+        team: nexusvideo
+      annotations:
+        summary: "任务队列积压（{{ $value }} 个任务）"
+        description: |
+          任务队列中有 {{ $value }} 个任务等待处理，超过阈值 10。
+        runbook: "deploy/runbook.md#任务队列积压"
+        action: "检查 ComfyUI worker 数量，考虑扩容"
+
+    # P0: 任务队列长度 > 50（严重积压）
+    - alert: TaskQueueOverflow
+      expr: |
+        redis_queue_length{queue="task_queue"} > 50
+      for: 30s
+      labels:
+        severity: P0
+        service: redis
+        team: nexusvideo
+      annotations:
+        summary: "任务队列严重积压（{{ $value }} 个任务）"
+        description: "任务队列积压 {{ $value }} 个任务，超过严重阈值 50"
+        action: "立即扩容 GPU worker 到最大副本数，检查是否有死锁"
+
+    # P2: 任务平均等待时间 > 60 秒
+    - alert: TaskHighWaitTime
+      expr: |
+        task_queue_wait_time_seconds > 60
+      for: 2m
+      labels:
+        severity: P2
+        service: redis
+        team: nexusvideo
+      annotations:
+        summary: "任务等待时间过长（{{ $value }}s）"
+        description: "平均任务等待时间 {{ $value }} 秒，超过 60 秒阈值"
+
+  # ============================================================
+  # API 性能告警规则
+  # ============================================================
+  - name: api_alerts
+    interval: 15s
+
+    # P1: API P99 延迟 > 5s
+    - alert: APIHighLatencyP99
+      expr: |
+        histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 5
+      for: 2m
+      labels:
+        severity: P1
+        service: fastapi
+        team: nexusvideo
+      annotations:
+        summary: "API P99 延迟过高（{{ $value | humanizeDuration }}）"
+        description: |
+          API P99 延迟 {{ $value | humanizeDuration }}，超过 5s 阈值。
+          慢接口：{{ $labels.handler }}
+        action: "检查慢查询/慢接口，考虑优化或降级"
+
+    # P1: API P95 延迟 > 3s
+    - alert: APIHighLatencyP95
+      expr: |
+        histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 3
+      for: 3m
+      labels:
+        severity: P1
+        service: fastapi
+        team: nexusvideo
+      annotations:
+        summary: "API P95 延迟过高（{{ $value | humanizeDuration }}）"
+        description: "API P95 延迟 {{ $value | humanizeDuration }}，超过 3s 阈值"
+
+    # P0: API 5xx 错误率 > 5%
+    - alert: APIHighErrorRate
+      expr: |
+        rate(http_requests_total{status=~"5.."}[5m])
+        /
+        rate(http_requests_total[5m]) > 0.05
+      for: 2m
+      labels:
+        severity: P0
+        service: fastapi
+        team: nexusvideo
+      annotations:
+        summary: "API 5xx 错误率过高（{{ $value | humanizePercentage }}）"
+        description: "5 分钟内 5xx 错误率 {{ $value | humanizePercentage }}，超过 5% 阈值"
+        action: "立即检查 FastAPI 日志，排查崩溃/数据库异常"
+
+    # P1: 视频生成任务失败率 > 10%
+    - alert: VideoGenHighFailureRate
+      expr: |
+        rate(comfyui_tasks_failed_total[10m])
+        /
+        (rate(comfyui_tasks_success_total[10m]) + rate(comfyui_tasks_failed_total[10m])) > 0.10
+      for: 5m
+      labels:
+        severity: P1
+        service: comfyui
+        team: nexusvideo
+      annotations:
+        summary: "视频生成失败率过高（{{ $value | humanizePercentage }}）"
+        description: "10 分钟内视频生成失败率 {{ $value | humanizePercentage }}，超过 10% 阈值"
+        action: "检查 ComfyUI 日志，确认模型文件/显存状态"
+
+  # ============================================================
+  # 服务可用性告警规则
+  # ============================================================
+  - name: availability_alerts
+    interval: 30s
+
+    # P0: ComfyUI 进程崩溃（健康检查失败 > 30s）
+    - alert: ComfyUIProcessDown
+      expr: |
+        up{job="comfyui"} == 0
+      for: 30s
+      labels:
+        severity: P0
+        service: comfyui
+        team: nexusvideo
+      annotations:
+        summary: "ComfyUI 进程崩溃（健康检查失败）"
+        description: "ComfyUI 进程不可用，健康检查连续失败超过 30 秒"
+        runbook: "deploy/runbook.md#ComfyUI进程崩溃"
+        action: "立即重启 ComfyUI worker，检查日志确认根因"
+
+    # P0: FastAPI 进程崩溃
+    - alert: FastAPIProcessDown
+      expr: |
+        up{job="fastapi"} == 0
+      for: 30s
+      labels:
+        severity: P0
+        service: fastapi
+        team: nexusvideo
+      annotations:
+        summary: "FastAPI 进程崩溃（健康检查失败）"
+        description: "FastAPI 主应用不可用，健康检查连续失败超过 30 秒"
+        action: "立即重启 FastAPI，检查数据库连接状态"
+
+    # P0: PostgreSQL 不可用
+    - alert: PostgreSQLDown
+      expr: |
+        up{job="postgres"} == 0
+      for: 30s
+      labels:
+        severity: P0
+        service: postgres
+        team: nexusvideo
+      annotations:
+        summary: "PostgreSQL 数据库不可用"
+        description: "PostgreSQL 健康检查失败超过 30 秒，所有写入操作受影响"
+        runbook: "deploy/runbook.md#数据库连接失败"
+        action: "立即检查 PostgreSQL 进程，确认磁盘空间/OOM 状态"
+
+    # P1: Redis 不可用
+    - alert: RedisDown
+      expr: |
+        up{job="redis"} == 0
+      for: 30s
+      labels:
+        severity: P1
+        service: redis
+        team: nexusvideo
+      annotations:
+        summary: "Redis 服务不可用"
+        description: "Redis 健康检查失败，任务队列和缓存不可用"
+        action: "检查 Redis 进程，确认内存是否超限"
+
+  # ============================================================
+  # 系统资源告警规则
+  # ============================================================
+  - name: system_alerts
+    interval: 30s
+
+    # P1: 服务器磁盘使用率 > 85%
+    - alert: DiskSpaceLow
+      expr: |
+        (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+      for: 5m
+      labels:
+        severity: P1
+        service: node
+        team: nexusvideo
+      annotations:
+        summary: "磁盘空间不足（剩余 {{ $value | humanizePercentage }}）"
+        description: "服务器根分区剩余空间 {{ $value | humanizePercentage }}，低于 15% 阈值"
+        action: "清理日志/Old artifacts，或扩容磁盘"
+
+    # P1: 服务器内存使用率 > 90%
+    - alert: MemoryHighUsage
+      expr: |
+        (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+      for: 3m
+      labels:
+        severity: P1
+        service: node
+        team: nexusvideo
+      annotations:
+        summary: "服务器内存使用率过高（{{ $value | humanizePercentage }}）"
+        description: "服务器内存使用率 {{ $value | humanizePercentage }}，超过 90% 阈值"
+        action: "检查内存泄漏，考虑释放低优先级进程或扩容"
+
+    # P2: 服务器 CPU 使用率 > 80%
+    - alert: CPUHighUsage
+      expr: |
+        (1 - avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100 > 80
+      for: 5m
+      labels:
+        severity: P2
+        service: node
+        team: nexusvideo
+      annotations:
+        summary: "CPU 使用率过高（{{ $value | humanizePercentage }}）"
+        description: "CPU 使用率 {{ $value | humanizePercentage }}，超过 80% 阈值"
+
+  # ============================================================
+  # 成本监控告警规则
+  # ============================================================
+  - name: cost_alerts
+    interval: 5m
+
+    # P2: GPU 实例数量超过预算上限
+    - alert: GPUInstanceOverBudget
+      expr: |
+        count(up{job="comfyui"} == 1) > 4
+      for: 5m
+      labels:
+        severity: P2
+        service: gpu
+        team: nexusvideo
+      annotations:
+        summary: "GPU 实例数量超过预算上限"
+        description: "当前运行 {{ $value }} 个 GPU 实例，超过上限 4 个"
+        action: "检查是否误触发扩容，确认业务是否真的需要这么多 GPU"
+
+    # P2: 24h 内 GPU 运行成本超过预算
+    - alert: DailyGPUCostExceeded
+      expr: |
+        sum(increase(gpu_instance_hours_total[24h])) * 8 > 800
+      for: 1h
+      labels:
+        severity: P2
+        service: gpu
+        team: nexusvideo
+      annotations:
+        summary: "24h GPU 运行成本超过 ¥800"
+        description: "过去 24 小时 GPU 运行成本约 ¥{{ $value | humanize }}，超过每日预算 ¥800"
+        action: "检查是否出现异常扩容或长尾任务"

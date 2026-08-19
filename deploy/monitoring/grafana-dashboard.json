@@ -1,0 +1,318 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "grafana"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "title": "NexusVideo 系统总览",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": [
+        {
+          "id": 10,
+          "title": "服务健康状态",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "red", "value": null },
+                { "color": "green", "value": 1 }
+              ]}
+            }
+          },
+          "targets": [
+            { "expr": "up{service=\"fastapi\"}", "legendFormat": "FastAPI", "refId": "A" },
+            { "expr": "up{service=\"comfyui\"}", "legendFormat": "ComfyUI", "refId": "B" },
+            { "expr": "up{service=\"redis\"}", "legendFormat": "Redis", "refId": "C" },
+            { "expr": "up{service=\"postgres\"}", "legendFormat": "PostgreSQL", "refId": "D" }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "GPU 实例数",
+          "type": "gauge",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "min": 0, "max": 4,
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 3 },
+                { "color": "red", "value": 4 }
+              ]}
+            }
+          },
+          "targets": [
+            { "expr": "count(up{job=\"comfyui\"} == 1)", "legendFormat": "GPU Workers", "refId": "A" }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "任务队列长度",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 5 },
+                { "color": "red", "value": 10 }
+              ]}
+            }
+          },
+          "targets": [
+            { "expr": "redis_queue_length{queue=\"task_queue\"}", "legendFormat": "Queue Length", "refId": "A" }
+          ]
+        },
+        {
+          "id": 13,
+          "title": "今日视频生成数",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            { "expr": "increase(comfyui_tasks_success_total[24h])", "legendFormat": "今日生成", "refId": "A" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "API 性能",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "panels": [
+        {
+          "id": 20,
+          "title": "API 请求量 (RPS)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" } }
+          },
+          "targets": [
+            {
+              "expr": "rate(http_requests_total[1m])",
+              "legendFormat": "{{ handler }} ({{ status }})",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "title": "API 延迟分位数 (P50 / P95 / P99)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "fieldConfig": {
+            "defaults": { "unit": "s", "color": { "mode": "palette-classic" } }
+          },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))", "legendFormat": "P50", "refId": "A" },
+            { "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))", "legendFormat": "P95", "refId": "B" },
+            { "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))", "legendFormat": "P99", "refId": "C" }
+          ]
+        },
+        {
+          "id": 22,
+          "title": "5xx 错误率",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "fieldConfig": {
+            "defaults": { "unit": "percentunit", "color": { "mode": "thresholds" } }
+          },
+          "targets": [
+            {
+              "expr": "rate(http_requests_total{status=~\"5..\"}[5m]) / rate(http_requests_total[5m])",
+              "legendFormat": "5xx Rate",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "title": "Top 5 慢接口",
+          "type": "bargauge",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "topk(5, histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[10m])))",
+              "legendFormat": "{{ handler }}",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "GPU 集群",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "panels": [
+        {
+          "id": 30,
+          "title": "GPU 显存使用率",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+          "fieldConfig": {
+            "defaults": { "unit": "percent", "color": { "mode": "thresholds" } }
+          },
+          "targets": [
+            {
+              "expr": "(nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes) * 100",
+              "legendFormat": "GPU {{ gpu }} ({{ instance }})",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 31,
+          "title": "GPU 利用率",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+          "fieldConfig": {
+            "defaults": { "unit": "percent", "color": { "mode": "thresholds" } }
+          },
+          "targets": [
+            {
+              "expr": "nvidia_gpu_utilization",
+              "legendFormat": "GPU {{ gpu }} ({{ instance }})",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 32,
+          "title": "GPU 温度",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 },
+          "fieldConfig": {
+            "defaults": { "unit": "celsius", "color": { "mode": "thresholds" } }
+          },
+          "targets": [
+            {
+              "expr": "nvidia_gpu_temperature",
+              "legendFormat": "GPU {{ gpu }}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 33,
+          "title": "GPU 功耗",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 },
+          "fieldConfig": {
+            "defaults": { "unit": "watt", "color": { "mode": "thresholds" } }
+          },
+          "targets": [
+            {
+              "expr": "nvidia_gpu_power_usage",
+              "legendFormat": "GPU {{ gpu }}",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "业务指标",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
+      "panels": [
+        {
+          "id": 40,
+          "title": "视频生成任务状态",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            { "expr": "rate(comfyui_tasks_success_total[5m])", "legendFormat": "成功/s", "refId": "A" },
+            { "expr": "rate(comfyui_tasks_failed_total[5m])", "legendFormat": "失败/s", "refId": "B" },
+            { "expr": "rate(comfyui_tasks_timeout_total[5m])", "legendFormat": "超时/s", "refId": "C" }
+          ]
+        },
+        {
+          "id": 41,
+          "title": "视频生成耗时分布",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, rate(comfyui_task_duration_seconds_bucket[10m]))", "legendFormat": "P50", "refId": "A" },
+            { "expr": "histogram_quantile(0.95, rate(comfyui_task_duration_seconds_bucket[10m]))", "legendFormat": "P95", "refId": "B" },
+            { "expr": "histogram_quantile(0.99, rate(comfyui_task_duration_seconds_bucket[10m]))", "legendFormat": "P99", "refId": "C" }
+          ]
+        },
+        {
+          "id": 42,
+          "title": "用户每日活跃 (DAU)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            { "expr": "increase(active_users_daily_total[1d])", "legendFormat": "DAU", "refId": "A" }
+          ]
+        },
+        {
+          "id": 43,
+          "title": "Redis 队列深度趋势",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            { "expr": "redis_queue_length{queue=\"task_queue\"}", "legendFormat": "任务队列", "refId": "A" },
+            { "expr": "redis_queue_length{queue=\"progress_queue\"}", "legendFormat": "进度队列", "refId": "B" }
+          ]
+        }
+      ]
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["nexusvideo", "production", "monitoring"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "NexusVideo 生产环境监控看板",
+  "uid": "nexusvideo-prod",
+  "version": 1
+}
