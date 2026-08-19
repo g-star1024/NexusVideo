@@ -275,7 +275,7 @@ impl ProcessManager {
         let stderr = child.stderr.take();
         let name = {
             let mut p = proc_arc.lock().await;
-            p.pid = Some(pid);
+            p.pid = pid;
             p.started_at = Some(Instant::now());
             p.child = Some(child);
             p.name.clone()
