@@ -225,8 +225,8 @@ export const useGenerateStore = defineStore('generate', () => {
         prompt: params.prompt,
         thumbnailUrl: '',
         videoUrl: httpUrl,
-        resolution: '1280×720',
-        durationSec: 4,
+        resolution: '832×480',
+        durationSec: 5,
         renderMode: source === 'cloud' ? '云端加速' : '本地GPU',
         createdAt: new Date().toISOString(),
       };
