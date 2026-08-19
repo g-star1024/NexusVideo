@@ -1,8 +1,16 @@
 """
 NexusVideo - 模型下载脚本
 ============================================================
-从 ModelScope 下载 Wan2.1 T2V 1.3B fp16 模型，
-支持断点续传。如果 ModelScope 不可用，自动 fallback 到 HuggingFace。
+从 HuggingFace / ModelScope 下载 Wan2.1 T2V 1.3B 模型套件，
+包含主模型（fp16）、VAE（pth）、UMT5-XXL 文本编码器（bf16）。
+支持断点续传。优先 HuggingFace，不可用时 fallback 到 ModelScope。
+
+⚠ 三模型合计约 17.6 GB（5.68 + 0.5 + 11.4），请确保磁盘空间充足。
+
+文件清单（HuggingFace: Wan-AI/Wan2.1-T2V-1.3B）:
+    diffusion_pytorch_model.safetensors   # 5.68 GB  主模型 (fp16)
+    Wan2.1_VAE.pth                        # 508 MB   VAE
+    models_t5_umt5-xxl-enc-bf16.pth      # 11.4 GB  UMT5-XXL 文本编码器 (bf16)
 
 依赖安装（如未安装）：
     pip install modelscope huggingface-hub tqdm requests
@@ -29,25 +37,25 @@ import tqdm
 # ================================================================
 MODEL_CONFIGS = [
     {
-        "name": "Wan2.1 T2V 1.3B fp16",
-        "file_name": "wan2.1-t2v-1.3b_fp16.safetensors",
-        "modelscope_repo": "wan_video/Wan2.1-T2V-1.3B",
+        "name": "Wan2.1 T2V 1.3B fp16 主模型",
+        "file_name": "diffusion_pytorch_model.safetensors",
+        "modelscope_repo": "Wan-AI/Wan2.1-T2V-1.3B",
         "huggingface_repo": "Wan-AI/Wan2.1-T2V-1.3B",
-        "expected_size_mb": 2_700,  # ~2.7GB
+        "expected_size_mb": 5_817,  # ~5.68 GB (fp16)
     },
     {
         "name": "Wan2.1 VAE",
-        "file_name": "wan_2.1_vae.safetensors",
-        "modelscope_repo": "wan_video/Wan2.1-T2V-1.3B",
+        "file_name": "Wan2.1_VAE.pth",
+        "modelscope_repo": "Wan-AI/Wan2.1-T2V-1.3B",
         "huggingface_repo": "Wan-AI/Wan2.1-T2V-1.3B",
-        "expected_size_mb": 900,
+        "expected_size_mb": 508,  # ~508 MB (pth)
     },
     {
-        "name": "UMT5 XXL FP8 Clip",
-        "file_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-        "modelscope_repo": "wan_video/Wan2.1-T2V-1.3B",
+        "name": "UMT5-XXL 文本编码器 bf16",
+        "file_name": "models_t5_umt5-xxl-enc-bf16.pth",
+        "modelscope_repo": "Wan-AI/Wan2.1-T2V-1.3B",
         "huggingface_repo": "Wan-AI/Wan2.1-T2V-1.3B",
-        "expected_size_mb": 4_200,
+        "expected_size_mb": 11_674,  # ~11.4 GB (bf16)
     },
 ]
 
