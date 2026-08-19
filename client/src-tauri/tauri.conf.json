@@ -4,8 +4,6 @@
   "productName": "NexusVideo",
   "version": "0.1.0",
   "identifier": "com.nexusvideo.client",
-  "homepage": "https://nexusvideo.ai",
-  "author": "NexusVideo Team",
   "description": "面向小白的 AI 视频生成桌面软件",
   "build": {
     "frontendDist": "../dist",
