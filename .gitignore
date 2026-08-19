@@ -106,3 +106,4 @@ logs/
 # ==================== Tauri ====================
 tauri.conf.json.exampledata/
 *.pyc
+.venv-py312/
