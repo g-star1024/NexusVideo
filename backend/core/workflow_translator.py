@@ -47,15 +47,18 @@ from exceptions import (
 WORKFLOW_FIELD_MAP: dict[str, dict[GenerationMode, dict[str, dict[str, dict[str, str]]]]] = {
     "txt2video": {
         GenerationMode.TXT2VIDEO: {
-            # Wan2.1 T2V 工作流节点映射
-            "1": {"inputs": {"text": "prompt"}},          # CLIPTextEncode 正向
+            # Wan2.1 T2V 1.3B fp16 精简工作流（10 节点）
+            # 节点编号：1=CLIPLoader, 2=CLIPTextEncode(pos), 3=CLIPTextEncode(neg),
+            #           4=UNETLoader, 5=VAELoader, 6=WanVideoWrapper,
+            #           7=EmptyHunYuanLatentVideo, 8=KSampler, 9=VAEDecodeTiled, 10=FFMPEG
+            "2": {"inputs": {"text": "prompt"}},          # CLIPTextEncode 正向
             "3": {"inputs": {"text": "_negative_prompt"}}, # CLIPTextEncode 负向
-            "5": {"inputs": {                            # EmptyLatentImage 分辨率/帧数
+            "7": {"inputs": {                            # EmptyLatentImage 分辨率/帧数
                 "width": "width",
                 "height": "height",
                 "length": "frames",
             }},
-            "6": {"inputs": {                            # KSampler 核心采样参数
+            "8": {"inputs": {                            # KSampler 核心采样参数
                 "seed": "seed",
                 "steps": "steps",
                 "cfg": "cfg",
@@ -570,6 +573,21 @@ class WorkflowTranslator:
     # 显存优化：自动降级参数
     # ================================================================
     @staticmethod
+    def _snap_frames_to_valid(n: int) -> int:
+        """
+        将帧数对齐到 Wan2.1 合法值（4n+1）：
+        9, 13, 17, 21, 25, 29, 33, 41, 49, 57, 65, 81, 97, 113, 129
+        """
+        if n < 9:
+            return 9
+        # 找到最近的 4k+1 值
+        valid = [9, 13, 17, 21, 25, 29, 33, 41, 49, 57, 65, 81, 97, 113, 129]
+        for v in valid:
+            if v >= n:
+                return v
+        return valid[-1]
+
+    @staticmethod
     def apply_degradation(
         workflow: dict[str, Any],
         level: int = 1,
@@ -579,7 +597,7 @@ class WorkflowTranslator:
 
         降级阶梯（对应甄知远报告 4.3 节）：
             Level 1: 降分辨率（width/height 各减 25%）
-            Level 2: 降帧数（frames 减半，最少 8 帧）
+            Level 2: 降帧数（frames/length 减半，对齐到 4n+1）
             Level 3: 降步数（steps 减 5，最少 10 步）
             Level 4: 降 CFG（cfg 减 2.0，最低 4.0）
 
@@ -599,12 +617,17 @@ class WorkflowTranslator:
                     inputs["height"] = max(256, int(inputs["height"] * 0.75))
 
             if level >= 2:
+                # EmptyHunYuanLatentVideo 使用 "length" 字段（txt2video 模板）
                 if "length" in inputs and isinstance(inputs["length"], (int, float)):
-                    inputs["length"] = max(8, int(inputs["length"] * 0.5))
+                    half = max(9, int(inputs["length"] * 0.5))
+                    inputs["length"] = WorkflowTranslator._snap_frames_to_valid(half)
+                # 兼容其他模板的 "frames" 字段
                 if "frames" in inputs and isinstance(inputs["frames"], (int, float)):
-                    inputs["frames"] = max(8, int(inputs["frames"] * 0.5))
+                    half = max(9, int(inputs["frames"] * 0.5))
+                    inputs["frames"] = WorkflowTranslator._snap_frames_to_valid(half)
                 if "frame_cap" in inputs and isinstance(inputs["frame_cap"], (int, float)):
-                    inputs["frame_cap"] = max(8, int(inputs["frame_cap"] * 0.5))
+                    half = max(9, int(inputs["frame_cap"] * 0.5))
+                    inputs["frame_cap"] = WorkflowTranslator._snap_frames_to_valid(half)
 
             if level >= 3:
                 if "steps" in inputs and isinstance(inputs["steps"], (int, float)):

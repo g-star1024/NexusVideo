@@ -175,7 +175,7 @@ pub fn install_panic_hook(app: AppHandle) {
             "message": message,
             "location": location,
             "stack_trace": stack,
-            "report_path": "config/crash_reports/",
+            "report_path": "logs/crash_reports/",
         });
         let _ = app.emit(EVENT_CRASH, crash_info);
 

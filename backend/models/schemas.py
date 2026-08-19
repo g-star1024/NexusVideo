@@ -67,34 +67,34 @@ class GenerateRequest(BaseModel):
     )
     # 以下为高级参数（前端右侧可折叠面板，小白用户可不传）
     width: int = Field(
-        default=512,
+        default=832,
         ge=256,
         le=1280,
-        description="视频宽度（像素）。值越大越清晰但越吃显存",
+        description="视频宽度（像素）。Wan2.1 T2V 1.3B 官方推荐 832",
     )
     height: int = Field(
-        default=512,
+        default=480,
         ge=256,
         le=1280,
-        description="视频高度（像素）",
+        description="视频高度（像素）。Wan2.1 T2V 1.3B 官方推荐 480",
     )
     frames: int = Field(
-        default=16,
-        ge=8,
-        le=48,
-        description="视频帧数。P0 阶段默认 16 帧（约 1-2 秒@8fps）",
+        default=81,
+        ge=9,
+        le=129,
+        description="视频帧数。Wan2.1 要求 4n+1，默认 81（5秒@16fps）",
     )
     steps: int = Field(
-        default=20,
+        default=30,
         ge=1,
-        le=50,
-        description="采样步数。步数越多质量越高但越慢",
+        le=100,
+        description="采样步数。Wan2.1 T2V 1.3B 推荐 30",
     )
     cfg: float = Field(
-        default=7.0,
+        default=6.0,
         ge=1.0,
         le=20.0,
-        description="CFG Scale（提示词引导强度）",
+        description="CFG Scale。Wan2.1 T2V 1.3B 推荐 6.0",
     )
     # 图生视频 / 视频风格化需要的输入（P1 阶段启用）
     input_image: str | None = Field(
@@ -126,11 +126,11 @@ class GenerateRequest(BaseModel):
         description="视频风格化模式（video2video）的源视频文件路径",
     )
 
-    # 文生视频可选模型变体：wan_gguf / animatediff
+    # 文生视频可选模型变体：wan_fp16 / animatediff
     # 由前端根据显存档位选择，后端加载对应工作流模板
     model_variant: str = Field(
-        default="wan_gguf",
-        description="文生视频模型变体：wan_gguf（Wan2.1 14B GGUF Q4）/ animatediff（AnimateDiff 保底）",
+        default="wan_fp16",
+        description="文生视频模型变体：wan_fp16（Wan2.1 T2V 1.3B fp16，主力）/ animatediff（AnimateDiff 保底）",
     )
 
     # denoising_strength 直接传入（高级用户 / API 调用方使用）
