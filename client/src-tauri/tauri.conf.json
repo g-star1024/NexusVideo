@@ -4,7 +4,6 @@
   "productName": "NexusVideo",
   "version": "0.1.0",
   "identifier": "com.nexusvideo.client",
-  "description": "面向小白的 AI 视频生成桌面软件",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -72,8 +71,6 @@
     "resources": [],
     "copyright": "© 2026 NexusVideo",
     "category": "Productivity",
-    "shortDescription": "AI 视频生成桌面软件",
-    "longDescription": "面向小白的 AI 视频生成桌面软件，一句话出片。基于 ComfyUI 引擎，支持文生视频、图生视频，零配置开箱即用。",
 
     "windows": {
       "certificateThumbprint": "<PLACEHOLDER:OV_CERT_THUMBPRINT>",
