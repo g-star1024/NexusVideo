@@ -217,7 +217,7 @@ jobs:
           }
 
           $CERT_PATH = "${{ secrets.NEXUS_SIGN_CERT_PATH }}"
-          $EXE_PATTERN = "target/x86_64-pc-windows-msvc/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64-setup.exe"
+          $EXE_PATTERN = "target/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64-setup.exe"
 
           if (Test-Path $EXE_PATTERN) {
             $securePwd = ConvertTo-SecureString $env:NEXUS_SIGN_PASSWORD -AsPlainText -Force
@@ -233,7 +233,7 @@ jobs:
       - name: 生成 SHA256
         shell: bash
         run: |
-          EXE_PATH="client/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64-setup.exe"
+          EXE_PATH="client/src-tauri/target/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64-setup.exe"
           if [ -f "$EXE_PATH" ]; then
             sha256sum "$EXE_PATH" > "$EXE_PATH.sha256"
             echo "SHA256: $(cat "$EXE_PATH.sha256")"
@@ -243,7 +243,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nexusvideo-windows-${{ needs.preflight.outputs.version }}
-          path: client/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64*
+          path: client/src-tauri/target/release/bundle/nsis/NexusVideo_${{ needs.preflight.outputs.version }}_x64*
           if-no-files-found: error
 
   # ================================================================
@@ -457,6 +457,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
@@ -472,7 +476,6 @@ jobs:
           gh release create "v${VERSION}" \
             --title "NexusVideo v${VERSION}" \
             --notes "$RELEASE_NOTES" \
-            --verify-tag \
             artifacts/**/*
 
           echo "[OK] GitHub Release 已创建: v${VERSION}"
