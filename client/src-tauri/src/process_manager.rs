@@ -185,7 +185,7 @@ impl ProcessManager {
             let result = self.spawn(proc_arc, app, spec.clone()).await;
             if result.is_ok() {
                 // 检查是否真正启动成功（端口就绪）
-                let (port, kind) = if proc_arc == &self.comfyui {
+                let (port, kind) = if Arc::ptr_eq(proc_arc, &self.comfyui) {
                     (8188u16, ProcKind::ComfyUI)
                 } else {
                     (9881u16, ProcKind::FastAPI)
@@ -357,7 +357,7 @@ impl ProcessManager {
 
     /// 启动后台监控任务（低频率轮询内存/CPU 使用率 + WebSocket 状态）
     /// 在 start_backend 成功后调用一次即可
-    pub fn start_monitoring(&self, app: AppHandle) {
+    pub async fn start_monitoring(&self, app: AppHandle) {
         let comfyui_arc = self.comfyui.clone();
         let fastapi_arc = self.fastapi.clone();
         let monitor_arc = self.monitor_handle.clone();

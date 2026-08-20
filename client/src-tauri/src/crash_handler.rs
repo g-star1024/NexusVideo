@@ -79,7 +79,9 @@ impl CrashRecord {
 
 /// 获取崩溃日志存储目录
 fn crash_dir() -> std::io::Result<PathBuf> {
-    let base = log_dir()?;
+    // log_dir() 返回 NexusResult（NexusError），需转为 io::Error 以匹配本函数返回类型
+    let base = log_dir()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let crash_path = base.join("crash_reports");
     fs::create_dir_all(&crash_path)?;
     Ok(crash_path)

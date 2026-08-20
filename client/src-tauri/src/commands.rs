@@ -9,6 +9,8 @@ use crate::events::{
 use crate::init_flow;
 use crate::process_manager::{ProcKind, ProcessManager};
 use crate::state::AppState;
+use base64::Engine;
+use futures_util::{FutureExt, SinkExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -376,7 +378,7 @@ pub async fn start_backend_full(
     broadcast(&app, "后端全部就绪").await;
 
     // 6) 启动后台监控任务（内存/CPU 轮询 + WebSocket 状态检查）
-    mgr_ref.start_monitoring(app.clone());
+    mgr_ref.start_monitoring(app.clone()).await;
     log::info!("[backend] 后台监控任务已启动");
 
     Ok(build_status(mgr_ref).await)
@@ -595,6 +597,8 @@ pub async fn listen_progress(
     let base = state.fastapi_base();
     let task_id_clone = task_id.clone();
     let ws_url = format!("{base}/progress/ws?task_id={task_id}");
+    // 先克隆一份供下方日志使用：ws_url 即将被 move 进 tokio::spawn 的 'static future
+    let ws_url_log = ws_url.clone();
 
     // 用 Arc 包装 Notify，确保可安全传递给 'static future（tokio::spawn）
     let cancel = Arc::new(tokio::sync::Notify::new());
@@ -612,7 +616,7 @@ pub async fn listen_progress(
         .await
         .insert(task_id.clone(), (handle, cancel));
 
-    log::info!("[progress] 已启动 WebSocket 进度监听: task_id={task_id}, url={ws_url}");
+    log::info!("[progress] 已启动 WebSocket 进度监听: task_id={task_id}, url={ws_url_log}");
     Ok(task_id)
 }
 

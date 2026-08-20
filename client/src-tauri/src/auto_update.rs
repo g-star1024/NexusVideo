@@ -38,7 +38,7 @@ pub const EVENT_UPDATE_ERROR: &str = "update://error";
 /// - 有新版本时通过 EVENT_UPDATE_AVAILABLE 通知前端
 /// - 用户确认下载后触发 EVENT_UPDATE_DOWNLOADING / EVENT_UPDATE_DOWNLOADED
 pub async fn check_for_updates(app: AppHandle) {
-    let updater = match app.updater().await {
+    let updater = match app.updater() {
         Ok(updater) => match updater.check().await {
             Ok(u) => u,
             Err(e) => {
@@ -84,7 +84,7 @@ pub async fn check_for_updates(app: AppHandle) {
 
 /// 开始下载更新包
 pub async fn start_download(app: AppHandle) -> Result<(), String> {
-    let mut updater = match app.updater().await {
+    let mut updater = match app.updater() {
         Ok(up) => match up.check().await {
             Ok(u) => u,
             Err(e) => return Err(e.to_string()),

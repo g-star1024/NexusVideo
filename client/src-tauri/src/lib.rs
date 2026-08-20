@@ -17,6 +17,12 @@ pub mod process_manager;
 pub mod state;
 pub mod static_server;
 
+// ---- 自引用声明（edition 2021 的 extern prelude 不含自身 crate 名，
+//      必须显式 `extern crate self` 才能在本 crate 内用 `nexusvideo_client_lib::`
+//      路径自引用；否则顶部 20 处 `use nexusvideo_client_lib::*` 全部报
+//      "cannot find crate nexusvideo_client_lib"）----
+extern crate self as nexusvideo_client_lib;
+
 use nexusvideo_client_lib::auto_update;
 use nexusvideo_client_lib::commands;
 use nexusvideo_client_lib::crash_handler;

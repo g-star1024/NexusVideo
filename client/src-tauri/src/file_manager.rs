@@ -180,7 +180,7 @@ pub fn check_disk_space() -> std::io::Result<DiskSpaceInfo> {
         0
     };
     let free_percent = if total > 0 {
-        (free * 100) / total
+        ((free * 100) / total) as u8
     } else {
         0
     };
@@ -211,20 +211,22 @@ pub fn check_disk_space() -> std::io::Result<DiskSpaceInfo> {
 fn get_disk_space_windows(dir: &Path) -> std::io::Result<(u64, u64)> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-    use winapi::shared::minwindef::{DWORD, ULONG_PTR};
     use winapi::um::fileapi::GetDiskFreeSpaceExW;
+    use winapi::um::winnt::LARGE_INTEGER;
     let wide: Vec<u16> = OsStr::new(dir.as_ref())
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let mut free: ULONG_PTR = 0;
-    let mut total: ULONG_PTR = 0;
-    let mut avail: ULONG_PTR = 0;
+    // GetDiskFreeSpaceExW 的 2/3/4 参数类型为 PLARGE_INTEGER（64 位），
+    // 不能用 ULONG_PTR（winapi 0.3 无此别名且宽度不符）。
+    let mut free = LARGE_INTEGER { QuadPart: 0 };
+    let mut total = LARGE_INTEGER { QuadPart: 0 };
+    let mut avail = LARGE_INTEGER { QuadPart: 0 };
     let ret = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, &mut avail) };
     if ret == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok((free as u64, total as u64))
+    Ok((free.QuadPart as u64, total.QuadPart as u64))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -269,8 +271,9 @@ fn get_disk_space_posix(dir: &Path) -> std::io::Result<(u64, u64)> {
 // 视频列表获取
 // ============================================================================
 
-/// 获取历史视频列表（遍历 videos/ 下所有日期的子目录）
-pub fn get_video_list() -> std::io::Result<Vec<VideoEntry>> {
+/// 获取历史视频列表（遍历 videos/ 下所有日期的子目录）——同步实现
+/// 上层 async command `get_video_list` 会调用本函数。
+pub fn get_video_list_inner() -> std::io::Result<Vec<VideoEntry>> {
     let videos_root = videos_dir()?;
     if !videos_root.exists() {
         return Ok(vec![]);
@@ -322,7 +325,8 @@ pub fn get_video_list() -> std::io::Result<Vec<VideoEntry>> {
                 size_bytes: size,
                 size_human: human_size(size),
                 thumb_path: thumb,
-                date_group,
+                // date_group 在同一日期目录下会被多次 push，需 clone 避免 move-after-move
+                date_group: date_group.clone(),
             });
         }
     }
@@ -413,8 +417,9 @@ pub fn evict_thumbnail_cache() -> std::io::Result<u64> {
 // 旧文件清理
 // ============================================================================
 
-/// 清理超过指定天数的视频和缩略图
-pub fn cleanup_old_files(days: u32) -> std::io::Result<CleanupResult> {
+/// 清理超过指定天数的视频和缩略图——同步实现
+/// 上层 async command `cleanup_old_files` 会调用本函数。
+pub fn cleanup_old_files_sync(days: u32) -> std::io::Result<CleanupResult> {
     let now = SystemTime::now();
     let cutoff = now - Duration::from_secs(days as u64 * 86400);
     let mut result = CleanupResult {
@@ -499,8 +504,9 @@ pub struct UserSettings {
     pub language: String,
 }
 
-/// 读取用户配置
-pub fn read_settings() -> std::io::Result<UserSettings> {
+/// 读取用户配置——同步实现
+/// 上层 async command `read_settings` 会调用本函数。
+pub fn read_settings_sync() -> std::io::Result<UserSettings> {
     let path = settings_file()?;
     if !path.exists() {
         return Ok(UserSettings::default());
@@ -511,8 +517,9 @@ pub fn read_settings() -> std::io::Result<UserSettings> {
     Ok(settings)
 }
 
-/// 写入用户配置
-pub fn write_settings(settings: &UserSettings) -> std::io::Result<()> {
+/// 写入用户配置——同步实现
+/// 上层 async command `write_settings` 会调用本函数。
+pub fn write_settings_sync(settings: &UserSettings) -> std::io::Result<()> {
     let path = settings_file()?;
     let content = serde_json::to_string_pretty(settings)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("配置序列化失败: {e}")))?;
@@ -534,7 +541,7 @@ pub async fn get_disk_space() -> Result<DiskSpaceInfo, String> {
 /// 获取历史视频列表
 #[tauri::command]
 pub async fn get_video_list() -> Result<Vec<VideoEntry>, String> {
-    get_video_list().map_err(|e| format!("获取视频列表失败: {e}"))
+    get_video_list_inner().map_err(|e| format!("获取视频列表失败: {e}"))
 }
 
 /// 触发旧文件清理
@@ -543,7 +550,7 @@ pub async fn cleanup_old_files(
     #[serde(default)] days: u32,
 ) -> Result<CleanupResult, String> {
     let days = if days == 0 { DEFAULT_CLEANUP_DAYS } else { days };
-    cleanup_old_files(days).map_err(|e| format!("清理旧文件失败: {e}"))
+    cleanup_old_files_sync(days).map_err(|e| format!("清理旧文件失败: {e}"))
 }
 
 /// 清理缩略图缓存
@@ -555,13 +562,13 @@ pub async fn evict_thumbnails() -> Result<u64, String> {
 /// 读取用户配置
 #[tauri::command]
 pub async fn read_settings() -> Result<UserSettings, String> {
-    read_settings().map_err(|e| format!("读取配置失败: {e}"))
+    read_settings_sync().map_err(|e| format!("读取配置失败: {e}"))
 }
 
 /// 写入用户配置
 #[tauri::command]
 pub async fn write_settings(settings: UserSettings) -> Result<bool, String> {
-    write_settings(&settings).map_err(|e| format!("写入配置失败: {e}"))?;
+    write_settings_sync(&settings).map_err(|e| format!("写入配置失败: {e}"))?;
     Ok(true)
 }
 

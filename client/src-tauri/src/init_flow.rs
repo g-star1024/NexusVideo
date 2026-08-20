@@ -329,7 +329,7 @@ async fn run_stage_2_extract_model(
     loop {
         let current_size = dir_total_size(&model_dir);
         let percent = if target_size > 0 {
-            std::cmp::min((current_size * 100) / target_size, 100u8)
+            std::cmp::min((current_size * 100) / target_size, 100u64) as u8
         } else {
             0
         };

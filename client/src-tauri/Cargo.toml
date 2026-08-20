@@ -93,7 +93,8 @@ panic = "abort"        # panic 直接终止（桌面端不靠 unwind 恢复）
 # Windows 资源嵌入（版本号、图标等）
 winres = "0.1"
 # Windows 磁盘空间查询 API（file_manager.rs 使用 GetDiskFreeSpaceExW）
-winapi = { version = "0.3", features = ["fileapi", "minwindef"] }
+# 显式启用 winnt 以确保 winapi::um::winnt::LARGE_INTEGER 可用（fileapi 也传递性启用）
+winapi = { version = "0.3", features = ["fileapi", "minwindef", "winnt"] }
 
 # ============================================================================
 # Unix 专用配置
