@@ -24,7 +24,7 @@
 //!   4) 本阶段使用全量更新（简单可靠）；增量方案留作 P2 优化
 //! ============================================================================
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 // ---- 事件常量 ----
@@ -38,9 +38,16 @@ pub const EVENT_UPDATE_ERROR: &str = "update://error";
 /// - 有新版本时通过 EVENT_UPDATE_AVAILABLE 通知前端
 /// - 用户确认下载后触发 EVENT_UPDATE_DOWNLOADING / EVENT_UPDATE_DOWNLOADED
 pub async fn check_for_updates(app: AppHandle) {
-    let updater = match app.updater() {
+    // tauri-plugin-updater 2.x:
+    //   updater()        -> Result<Updater>
+    //   check().await    -> Result<Option<Update>>（None 表示已是最新）
+    let update = match app.updater() {
         Ok(updater) => match updater.check().await {
-            Ok(u) => u,
+            Ok(Some(u)) => u,
+            Ok(None) => {
+                log::info!("[auto_update] 当前已是最新版本");
+                return;
+            }
             Err(e) => {
                 log::warn!("[auto_update] 更新检查失败: {e}");
                 let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_ERROR, serde_json::json!({
@@ -60,13 +67,8 @@ pub async fn check_for_updates(app: AppHandle) {
         }
     };
 
-    if updater.is_latest() {
-        log::info!("[auto_update] 当前已是最新版本");
-        return;
-    }
-
-    let new_version = updater.version().to_string();
-    let release_notes = updater.body().map(|s| s.to_string()).unwrap_or_default();
+    let new_version = update.version.clone();
+    let release_notes = update.body.clone().unwrap_or_default();
     let current_version = app.package_info().version.to_string();
 
     log::info!(
@@ -84,19 +86,19 @@ pub async fn check_for_updates(app: AppHandle) {
 
 /// 开始下载更新包
 pub async fn start_download(app: AppHandle) -> Result<(), String> {
-    let mut updater = match app.updater() {
+    // tauri-plugin-updater 2.x:
+    //   updater()     -> Result<Updater>
+    //   check().await -> Result<Option<Update>>
+    let update = match app.updater() {
         Ok(up) => match up.check().await {
-            Ok(u) => u,
+            Ok(Some(u)) => u,
+            Ok(None) => return Ok(()),
             Err(e) => return Err(e.to_string()),
         },
         Err(e) => return Err(e.to_string()),
     };
 
-    if updater.is_latest() {
-        return Ok(());
-    }
-
-    let new_version = updater.version().to_string();
+    let new_version = update.version.clone();
 
     // 通知前端下载开始
     let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_DOWNLOADING, serde_json::json!({
@@ -106,13 +108,20 @@ pub async fn start_download(app: AppHandle) -> Result<(), String> {
     }));
 
     // 执行下载并安装
-    updater.download_and_install(|_, _loaded, _total| {
-        // tauri-plugin-updater 的回调签名为 (chunk, loaded_bytes, total_bytes)
-        // 版本兼容：这里只记录，具体进度通过单独方式推送
-        log::debug!("[auto_update] 下载中...");
-    }, || {
-        log::info!("[auto_update] 下载完成，等待重启安装");
-    }).await.map_err(|e| e.to_string())?;
+    // download_and_install 为异步方法，参数为两个闭包：
+    //   on_chunk:            FnMut(usize, Option<u64>)（chunk 长度, 总字节数）
+    //   on_download_finish:  FnOnce()
+    update
+        .download_and_install(
+            |_chunk, _total| {
+                log::debug!("[auto_update] 下载中...");
+            },
+            || {
+                log::info!("[auto_update] 下载完成，等待重启安装");
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 通知前端更新已下载，等待重启安装
     let _ = tauri::Emitter::emit(&app, EVENT_UPDATE_DOWNLOADED, serde_json::json!({

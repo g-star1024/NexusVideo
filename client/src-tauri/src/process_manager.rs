@@ -194,7 +194,7 @@ impl ProcessManager {
                     .wait_until_healthy(kind, app, Duration::from_secs(60))
                     .await;
                 if healthy.is_ok() {
-                    log::info!("[{}] 启动成功（第 {attempt} 次尝试）", proc_arc.lock().await.name, attempt);
+                    log::info!("[{}] 启动成功（第 {attempt} 次尝试）", proc_arc.lock().await.name);
                     return Ok(());
                 }
                 log::warn!("[{}] 第 {attempt} 次启动未就绪: {}", proc_arc.lock().await.name, healthy.unwrap_err());
@@ -462,11 +462,14 @@ impl ProcessManager {
             ProcKind::FastAPI => &self.fastapi,
         };
         let mut p = proc_arc.lock().await;
+        // 提前取出进程名（在借用 p.child 之前），避免与下方 child 的可变借用冲突
+        let name = p.name.clone();
+        p.state = ProcState::Stopping;
+        emit_status(app);
+
         let Some(child) = p.child.as_mut() else {
             return;
         };
-        p.state = ProcState::Stopping;
-        emit_status(app);
 
         // 1) 优先：ComfyUI 走 HTTP /interrupt + 自然退出；FastAPI 走 kill(优雅)
         //    这里统一先尝试 kill(Parent) 的 start_kill（Unix SIGTERM / Win TerminateProcess）
@@ -481,7 +484,7 @@ impl ProcessManager {
 
         if !exited {
             // 3) 超时强杀
-            log::warn!("[{}] 8s 未退出，强杀 pid={:?}", p.name, pid);
+            log::warn!("[{}] 8s 未退出，强杀 pid={:?}", name, pid);
             let _ = child.kill().await;
         }
         p.child = None;

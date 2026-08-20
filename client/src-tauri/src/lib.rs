@@ -23,12 +23,9 @@ pub mod static_server;
 //      "cannot find crate nexusvideo_client_lib"）----
 extern crate self as nexusvideo_client_lib;
 
-use nexusvideo_client_lib::auto_update;
-use nexusvideo_client_lib::commands;
-use nexusvideo_client_lib::crash_handler;
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

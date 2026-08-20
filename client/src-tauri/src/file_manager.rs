@@ -212,21 +212,29 @@ fn get_disk_space_windows(dir: &Path) -> std::io::Result<(u64, u64)> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use winapi::um::fileapi::GetDiskFreeSpaceExW;
-    use winapi::um::winnt::LARGE_INTEGER;
+    use winapi::um::winnt::ULARGE_INTEGER;
     let wide: Vec<u16> = OsStr::new(dir.as_ref())
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    // GetDiskFreeSpaceExW 的 2/3/4 参数类型为 PLARGE_INTEGER（64 位），
-    // 不能用 ULONG_PTR（winapi 0.3 无此别名且宽度不符）。
-    let mut free = LARGE_INTEGER { QuadPart: 0 };
-    let mut total = LARGE_INTEGER { QuadPart: 0 };
-    let mut avail = LARGE_INTEGER { QuadPart: 0 };
-    let ret = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, &mut avail) };
+    // GetDiskFreeSpaceExW 的 2/3/4 参数类型为 PULARGE_INTEGER（无符号 64 位）。
+    // 为避免 winapi UNION 元组结构体的字段访问坑，直接用 u64 承载返回值，
+    // 再强转为 *mut ULARGE_INTEGER 传入（u64 与 ULARGE_INTEGER 同为 8 字节、布局一致）。
+    let mut free_bytes: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut avail_bytes: u64 = 0;
+    let ret = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_bytes as *mut u64 as *mut ULARGE_INTEGER,
+            &mut total_bytes as *mut u64 as *mut ULARGE_INTEGER,
+            &mut avail_bytes as *mut u64 as *mut ULARGE_INTEGER,
+        )
+    };
     if ret == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok((free.QuadPart as u64, total.QuadPart as u64))
+    Ok((free_bytes, total_bytes))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -547,8 +555,11 @@ pub async fn get_video_list() -> Result<Vec<VideoEntry>, String> {
 /// 触发旧文件清理
 #[tauri::command]
 pub async fn cleanup_old_files(
-    #[serde(default)] days: u32,
+    // Tauri 2 的 command 宏不会把参数上的 #[serde(...)] 转发到生成的 args 结构体，
+    // 直接用 Option<u32> + 手动默认值更稳妥（前端可不传 days，缺失即 None）。
+    days: Option<u32>,
 ) -> Result<CleanupResult, String> {
+    let days = days.unwrap_or(0);
     let days = if days == 0 { DEFAULT_CLEANUP_DAYS } else { days };
     cleanup_old_files_sync(days).map_err(|e| format!("清理旧文件失败: {e}"))
 }

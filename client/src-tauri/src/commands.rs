@@ -4,7 +4,7 @@
 //! 代理转发到本地 FastAPI(9881)，前端永远不直连 HTTP——这样未来 P2
 //! "本地/云端智能路由"只需在 Rust 层切换目标地址，前端零改动。
 use crate::events::{
-    event_name, BackendStatus, InitProgress, ProcState, ProgressPayload, TaskState, TaskStatus,
+    event_name, BackendStatus, InitProgress, ProgressPayload, TaskState, TaskStatus,
 };
 use crate::init_flow;
 use crate::process_manager::{ProcKind, ProcessManager};
@@ -681,10 +681,12 @@ async fn listen_progress_loop(
         retry = 0; // 连接成功，重置重试计数
 
         // 拆分读写
-        let (write, mut read) = ws_stream.split();
+        let (mut write, mut read) = ws_stream.split();
 
         // 后台发送 ping 维持连接（每 30s）
-        let ping_cancel = tokio::sync::Notify::new();
+        // 用 Arc<Notify>：克隆一份移入 spawn 闭包，外层仍持有原 Arc 用于 notify_one
+        let ping_cancel = Arc::new(tokio::sync::Notify::new());
+        let pc = Arc::clone(&ping_cancel);
         let _ = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
@@ -692,7 +694,7 @@ async fn listen_progress_loop(
                     _ = interval.tick() => {
                         let _ = write.send(Message::Ping(vec![])).await;
                     }
-                    _ = ping_cancel.notified() => break,
+                    _ = pc.notified() => break,
                 }
             }
         });
