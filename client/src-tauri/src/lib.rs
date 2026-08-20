@@ -85,10 +85,15 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 let handle = window.app_handle().clone();
                 if let Some(state) = handle.try_state::<AppState>() {
+                    // 克隆一份 AppHandle 用于发射事件与停止子进程：
+                    // 原 `handle` 已被 `state`（State<'_, AppState>）借用，
+                    // 不能再次 move 进 async 块（否则 E0505）。emit_handle 是
+                    // 独立克隆，move 进 async 块不影响 `state` 对 `handle` 的借用。
+                    let emit_handle = handle.clone();
                     tauri::async_runtime::block_on(async move {
                         // 1) 通知前端正在退出
                         let _ = tauri::Emitter::emit(
-                            &handle,
+                            &emit_handle,
                             nexusvideo_client_lib::events::event_name::BACKEND_STATUS,
                             serde_json::json!({"message": "应用退出，正在停止后端..."}),
                         );
@@ -101,7 +106,7 @@ pub fn run() {
 
                         // 4) 停止全部子进程
                         let mgr = state.proc_mgr.read().await;
-                        mgr.stop_all(&handle).await;
+                        mgr.stop_all(&emit_handle).await;
                     });
                 }
             }

@@ -185,7 +185,7 @@ impl ProcessManager {
             let result = self.spawn(proc_arc, app, spec.clone()).await;
             if result.is_ok() {
                 // 检查是否真正启动成功（端口就绪）
-                let (port, kind) = if Arc::ptr_eq(proc_arc, &self.comfyui) {
+                let (_port, kind) = if Arc::ptr_eq(proc_arc, &self.comfyui) {
                     (8188u16, ProcKind::ComfyUI)
                 } else {
                     (9881u16, ProcKind::FastAPI)
@@ -246,10 +246,11 @@ impl ProcessManager {
         // 子进程随父进程退出（Unix：进程组；Windows：JobObject 兜底见 stop）
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             unsafe {
                 cmd.pre_exec(|| {
                     // 新建进程组，便于整组信号
+                    // 注意：tokio::process::Command 自带 inherent `pre_exec`，
+                    // 无需 std::os::unix::process::CommandExt（会触发 unused import 警告）。
                     libc::setsid();
                     Ok(())
                 });

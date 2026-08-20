@@ -213,7 +213,7 @@ fn get_disk_space_windows(dir: &Path) -> std::io::Result<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
     use winapi::um::fileapi::GetDiskFreeSpaceExW;
     use winapi::um::winnt::ULARGE_INTEGER;
-    let wide: Vec<u16> = OsStr::new(dir.as_ref())
+    let wide: Vec<u16> = OsStr::new(dir)
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();

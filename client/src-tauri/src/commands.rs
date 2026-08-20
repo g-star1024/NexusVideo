@@ -678,8 +678,6 @@ async fn listen_progress_loop(
             }
         };
 
-        retry = 0; // 连接成功，重置重试计数
-
         // 拆分读写
         let (mut write, mut read) = ws_stream.split();
 

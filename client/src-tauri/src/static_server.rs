@@ -34,7 +34,7 @@ pub struct StaticServer {
 
 impl StaticServer {
     /// 创建静态服务器实例（尚未启动）
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(_app: AppHandle) -> Self {
         Self {
             accept_handle: None,
         }

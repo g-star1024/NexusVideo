@@ -24,7 +24,7 @@
 //!   4) 本阶段使用全量更新（简单可靠）；增量方案留作 P2 优化
 //! ============================================================================
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 
 // ---- 事件常量 ----
