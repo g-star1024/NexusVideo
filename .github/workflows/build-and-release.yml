@@ -471,6 +471,12 @@ jobs:
         run: |
           RELEASE_NOTES="## NexusVideo v${VERSION}\n\n发布日期: $(date -u +%Y-%m-%d)\n\n### 下载\n\n- Windows: NexusVideo_${VERSION}_x64-setup.exe\n- macOS Intel: NexusVideo_${VERSION}_x64.dmg\n- macOS ARM: NexusVideo_${VERSION}_aarch64.dmg\n\n### 更新说明\n\n详见 [Release Notes](https://github.com/${{ github.repository }}/releases/tag/v${VERSION})"
 
+          # 幂等处理：若同 tag 的 Release 已存在（如重跑遗留），先删除再重建，避免 "release already exists"
+          if gh release view "v${VERSION}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "[INFO] 已存在 v${VERSION} Release，先删除以保证重跑幂等"
+            gh release delete "v${VERSION}" --yes --repo "${{ github.repository }}"
+          fi
+
           gh release create "v${VERSION}" \
             --title "NexusVideo v${VERSION}" \
             --notes "$RELEASE_NOTES" \
