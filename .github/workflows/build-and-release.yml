@@ -201,7 +201,7 @@ jobs:
         shell: bash
         run: |
           cd client/src-tauri
-          cargo tauri build --target x86_64-pc-windows-msvc
+          cargo tauri build
         timeout-minutes: 25
 
       - name: 签名 (Windows EV)
