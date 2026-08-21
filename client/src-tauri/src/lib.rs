@@ -15,6 +15,7 @@ pub mod init_flow;
 pub mod paths;
 pub mod process_manager;
 pub mod state;
+pub mod startup;
 pub mod static_server;
 
 // ---- 自引用声明（edition 2021 的 extern prelude 不含自身 crate 名，
@@ -29,7 +30,22 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // ==================================================================
+    // P0 修复 (线上崩溃 c0000409 / 双击无反应)：
+    // 启动前先检测 WebView2 运行时。release 构建无控制台，一旦缺失，
+    // Tauri 无法建窗 → .run() 返回 Err → 旧代码 .expect() panic →
+    // abort() 静默死亡。这里提前检测，缺失则弹 MessageBox 引导安装，
+    // 干净退出（std::process::exit），绝不静默 abort。
+    // ==================================================================
+    #[cfg(windows)]
+    {
+        if let Err(reason) = nexusvideo_client_lib::startup::ensure_webview2_available() {
+            nexusvideo_client_lib::startup::show_fatal_messagebox("NexusVideo 无法启动", &reason);
+            std::process::exit(1);
+        }
+    }
+
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -152,8 +168,26 @@ pub fn run() {
             crash_handler::get_crash_reports,
             crash_handler::clear_crash_reports,
         ])
-        .run(tauri::generate_context!())
-        .expect("Tauri 应用启动失败");
+        .run(tauri::generate_context!());
+
+    // ==================================================================
+    // P0 修复：用 match 替代 .expect()（panic=abort 会静默死亡，
+    // 事件查看器 EventID 1000 / ExceptionCode c0000409 = abort() 快速失败）。
+    // 任何 build/run 失败都弹 MessageBox 让用户"看见"原因，而不是静默死亡。
+    // （panic 模式已改回 unwind，见 Cargo.toml，确保 crash_handler 的
+    //  panic hook 能完整写入 %APPDATA%\com.nexusvideo.client\logs\crash_reports\）
+    // ==================================================================
+    match run_result {
+        Ok(()) => {
+            // 正常进入事件循环；窗口关闭时由 on_window_event 优雅停止子进程并退出。
+        }
+        Err(e) => {
+            let msg = nexusvideo_client_lib::startup::classify_startup_error(&e);
+            log::error!("[startup] Tauri 应用启动失败:\n{msg}");
+            nexusvideo_client_lib::startup::show_fatal_messagebox("NexusVideo 启动失败", &msg);
+            std::process::exit(1);
+        }
+    }
 }
 
 /// IPC 命令：检查是否有新版本更新

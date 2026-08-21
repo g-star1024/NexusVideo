@@ -84,7 +84,14 @@ opt-level = "z"        # 体积优先（z < s < 3），桌面端冷启动更友�
 lto = true             # 链接期优化，去掉未用代码
 codegen-units = 1      # 单元合并，进一步缩体积
 strip = true           # 剥离调试符号
-panic = "abort"        # panic 直接终止（桌面端不靠 unwind 恢复）
+# P0 修复：由 "abort" 改回 "unwind"。
+# 原因：abort 下任何 panic 立即 __fastfail → c0000409，crash_handler 的
+#       panic hook 来不及写 crash_reports/，用户也看不到任何提示（静默死亡）。
+# unwind 下栈会展开、析构正常执行，panic hook 能把崩溃完整写入
+#       %APPDATA%\com.nexusvideo.client\logs\crash_reports\，便于线上诊断。
+# 体积影响：unwind 会写入 eh_frame 展开表，strip + opt-level="z" 下增量很小
+#       （数 MB 二进制上约 +几百 KB），完全可接受。Tauri 官方模板默认即 unwind。
+panic = "unwind"       # 允许 panic hook 完整执行 + 崩溃日志落盘
 
 # ============================================================================
 # Windows 专用配置 (MSVC toolchain)
@@ -94,7 +101,8 @@ panic = "abort"        # panic 直接终止（桌面端不靠 unwind 恢复）
 winres = "0.1"
 # Windows 磁盘空间查询 API（file_manager.rs 使用 GetDiskFreeSpaceExW）
 # 显式启用 winnt 以确保 winapi::um::winnt::LARGE_INTEGER 可用（fileapi 也传递性启用）
-winapi = { version = "0.3", features = ["fileapi", "minwindef", "winnt"] }
+# winuser：startup.rs 的 show_fatal_messagebox 用 MessageBoxW 弹窗（release 无控制台下的唯一报错通道）
+winapi = { version = "0.3", features = ["fileapi", "minwindef", "winnt", "winuser"] }
 
 # ============================================================================
 # Unix 专用配置
