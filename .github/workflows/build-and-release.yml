@@ -469,7 +469,8 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
         shell: bash
         run: |
-          RELEASE_NOTES="## NexusVideo v${VERSION}\n\n发布日期: $(date -u +%Y-%m-%d)\n\n### 下载\n\n- Windows: NexusVideo_${VERSION}_x64-setup.exe\n- macOS Intel: NexusVideo_${VERSION}_x64.dmg\n- macOS ARM: NexusVideo_${VERSION}_aarch64.dmg\n\n### 更新说明\n\n详见 [Release Notes](https://github.com/${{ github.repository }}/releases/tag/v${VERSION})"
+          # 使用 $'...' 让 \n 被正确解释为换行（双引号里 \n 是字面文本）
+          RELEASE_NOTES=$'## NexusVideo v'"${VERSION}"$'\n\n发布日期: '"$(date -u +%Y-%m-%d)"$'\n\n### 下载\n\n- Windows: NexusVideo_'"${VERSION}"$'_x64-setup.exe\n- macOS Intel: NexusVideo_'"${VERSION}"$'_x64.dmg\n- macOS ARM: NexusVideo_'"${VERSION}"$'_aarch64.dmg\n\n### 更新说明\n\n详见 [Release Notes](https://github.com/'"${{ github.repository}}"$'/releases/tag/v'"${VERSION}"$')'
 
           # 幂等处理：若同 tag 的 Release 已存在（如重跑遗留），先删除再重建，避免 "release already exists"
           if gh release view "v${VERSION}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
@@ -477,10 +478,15 @@ jobs:
             gh release delete "v${VERSION}" --yes --repo "${{ github.repository }}"
           fi
 
+          # 只上传打包产物（.exe/.dmg/.sha256/update.json），排除 frontend-dist 等无关 artifact
+          RELEASE_FILES=$(find artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.sha256' -o -name 'update.json' \))
+          echo "=== 将上传以下文件 ==="
+          echo "$RELEASE_FILES"
+
           gh release create "v${VERSION}" \
             --title "NexusVideo v${VERSION}" \
             --notes "$RELEASE_NOTES" \
-            $(find artifacts -type f)
+            $RELEASE_FILES
 
           echo "[OK] GitHub Release 已创建: v${VERSION}"
 
