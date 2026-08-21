@@ -384,9 +384,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nexusvideo-macos-${{ matrix.arch }}-${{ needs.preflight.outputs.version }}
-          path: |
-            client/src-tauri/target/**/NexusVideo_${{ needs.preflight.outputs.version }}_${{ steps.arch_target.outputs.dmg_suffix }}*
-            client/src-tauri/target/**/NexusVideo.app
+          path: client/src-tauri/target/**/NexusVideo_${{ needs.preflight.outputs.version }}_${{ steps.arch_target.outputs.dmg_suffix }}*
           if-no-files-found: warn
 
   # ================================================================
@@ -432,7 +430,7 @@ jobs:
                 "sha256": "$MAC_ARM_SHA"
               }
             },
-            "body": "请查看 [GitHub Release Notes](https://github.com/NexusVideo/NexusVideo/releases/tag/v${VERSION})"
+            "body": "请查看 [GitHub Release Notes](https://github.com/${{ github.repository }}/releases/tag/v${VERSION})"
           }
           EOF
 
@@ -471,12 +469,12 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
         shell: bash
         run: |
-          RELEASE_NOTES="## NexusVideo v${VERSION}\n\n发布日期: $(date -u +%Y-%m-%d)\n\n### 下载\n\n- Windows: NexusVideo_${VERSION}_x64-setup.exe\n- macOS Intel: NexusVideo_${VERSION}_x64.dmg\n- macOS ARM: NexusVideo_${VERSION}_aarch64.dmg\n\n### 更新说明\n\n详见 [Release Notes](https://github.com/NexusVideo/NexusVideo/releases/tag/v${VERSION})"
+          RELEASE_NOTES="## NexusVideo v${VERSION}\n\n发布日期: $(date -u +%Y-%m-%d)\n\n### 下载\n\n- Windows: NexusVideo_${VERSION}_x64-setup.exe\n- macOS Intel: NexusVideo_${VERSION}_x64.dmg\n- macOS ARM: NexusVideo_${VERSION}_aarch64.dmg\n\n### 更新说明\n\n详见 [Release Notes](https://github.com/${{ github.repository }}/releases/tag/v${VERSION})"
 
           gh release create "v${VERSION}" \
             --title "NexusVideo v${VERSION}" \
             --notes "$RELEASE_NOTES" \
-            artifacts/**/*
+            $(find artifacts -type f)
 
           echo "[OK] GitHub Release 已创建: v${VERSION}"
 
