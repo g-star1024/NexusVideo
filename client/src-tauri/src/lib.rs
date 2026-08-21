@@ -46,7 +46,12 @@ pub fn run() {
     }
 
     let run_result = tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .max_file_size(1 << 20) // 1MB，与原 JSON 配置 max_size:1048576 一致
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
