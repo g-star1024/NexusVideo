@@ -20,7 +20,12 @@ use tauri::{AppHandle, Emitter, State};
 // 一、后端进程控制命令
 // ===========================================================================
 
-/// 启动后端：先 ComfyUI，就绪后启动 FastAPI，再等 FastAPI 就绪
+/// 启动后端：ComfyUI 可选（缺失则仅 warning 跳过，不阻断 FastAPI），
+/// FastAPI 必启；FastAPI 失败才返回错误
+///
+/// ComfyUI 缺失判定：`start_comfyui` 返回 `None`（NEXUS_MANAGE_COMFYUI=false
+/// 或目录/binary 缺失）。此行为保证 v0.1.10 打包版（仅含轻量 API，无 comfyui）
+/// 装完即可注册/登录——FastAPI 独立启动，/auth/register:9881 可用。
 #[tauri::command]
 pub async fn start_backend(
     app: AppHandle,
@@ -29,35 +34,72 @@ pub async fn start_backend(
     let mgr = state.proc_mgr.read().await;
     let mgr_ref: &ProcessManager = &mgr;
 
-    // 1) 启动 ComfyUI
-    mgr_ref.start_comfyui(&app).await?;
-    broadcast(&app, "ComfyUI 启动中...").await;
+    if let Some(spawn_result) = mgr_ref.start_comfyui(&app).await {
+        match spawn_result {
+            Ok(_) => {
+                broadcast(&app, "ComfyUI 启动中...").await;
+                if mgr_ref
+                    .wait_until_healthy(ProcKind::ComfyUI, &app, Duration::from_secs(120))
+                    .await
+                    .is_ok()
+                {
+                    broadcast(&app, "ComfyUI 就绪").await;
+                }
+            }
+            Err(e) => {
+                log::warn!("[backend] ComfyUI 启动失败，将继续启动 FastAPI: {e}");
+            }
+        }
+    } else {
+        // ComfyUI 不可用（非致命）——跳过，FastAPI 独立启动
+        log::warn!("[backend] ComfyUI 不可用，跳过（FastAPI 将独立启动，不影响注册/登录）");
+        broadcast(&app, "ComfyUI 不可用，跳过").await;
+    }
 
-    // 2) 等 ComfyUI 健康（模型加载可能较慢，给 120s）
-    mgr_ref
-        .wait_until_healthy(ProcKind::ComfyUI, &app, Duration::from_secs(120))
-        .await?;
-    broadcast(&app, "ComfyUI 就绪").await;
-
-    // 3) 启动 FastAPI
-    mgr_ref.start_fastapi(&app).await?;
-    broadcast(&app, "FastAPI 启动中...").await;
-
-    // 4) 等 FastAPI 健康
-    mgr_ref
-        .wait_until_healthy(ProcKind::FastAPI, &app, Duration::from_secs(30))
-        .await?;
-    broadcast(&app, "后端全部就绪").await;
-
+    start_backend_light(mgr_ref, &app).await?;
     Ok(build_status(mgr_ref).await)
+}
+
+/// 仅启动 FastAPI（不含 ComfyUI）——注册/登录/账号类流程的最小依赖
+///
+/// 供 `start_backend` 复用，也供 init_flow 首次启动时 ComfyUI 缺失场景使用。
+/// FastAPI 启动失败（最多 3 次重试）才返回 Err。
+async fn start_backend_light(mgr: &ProcessManager, app: &AppHandle) -> Result<(), String> {
+    const MAX_RETRIES: u8 = 3;
+    let mut last_err = String::new();
+    for attempt in 1..=MAX_RETRIES {
+        let spawn = mgr.start_fastapi(app).await;
+        if spawn.is_ok() {
+            if mgr
+                .wait_until_healthy(ProcKind::FastAPI, app, Duration::from_secs(30))
+                .await
+                .is_ok()
+            {
+                log::info!("[backend] FastAPI 启动成功（第 {attempt} 次尝试）");
+                broadcast(app, "后端全部就绪").await;
+                return Ok(());
+            } else {
+                last_err = format!("FastAPI 就绪超时（第 {attempt} 次）");
+            }
+        } else {
+            last_err = format!(
+                "FastAPI 启动失败（第 {attempt} 次）: {}",
+                spawn.unwrap_err()
+            );
+        }
+        if attempt < MAX_RETRIES {
+            log::warn!("[backend] {last_err}，5 秒后重试...");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    }
+    Err(format!(
+        "FastAPI 启动失败（已重试 {MAX_RETRIES} 次）: {last_err}"
+    ))
 }
 
 /// 优雅停止全部后端进程
 #[tauri::command]
-pub async fn stop_backend(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn stop_backend(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let mgr = state.proc_mgr.read().await;
     mgr.stop_all(&app).await;
     Ok(())
@@ -65,9 +107,7 @@ pub async fn stop_backend(
 
 /// 查询后端状态
 #[tauri::command]
-pub async fn get_backend_status(
-    state: State<'_, AppState>,
-) -> Result<BackendStatus, String> {
+pub async fn get_backend_status(state: State<'_, AppState>) -> Result<BackendStatus, String> {
     let mgr = state.proc_mgr.read().await;
     Ok(build_status(&mgr).await)
 }
@@ -78,7 +118,7 @@ pub async fn get_backend_status(
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateRequest {
-    pub mode: String,            // txt2video | img2video | video2video
+    pub mode: String, // txt2video | img2video | video2video
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_path: Option<String>,
@@ -133,10 +173,7 @@ pub async fn generate_video(
 
 /// 主动查询任务状态（前端也可单次拉取）
 #[tauri::command]
-pub async fn query_task(
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<TaskStatus, String> {
+pub async fn query_task(state: State<'_, AppState>, task_id: String) -> Result<TaskStatus, String> {
     let url = format!("{}/task/{}", state.fastapi_base(), task_id);
     let status = state
         .http
@@ -152,10 +189,7 @@ pub async fn query_task(
 
 /// 取消任务
 #[tauri::command]
-pub async fn cancel_task(
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<bool, String> {
+pub async fn cancel_task(state: State<'_, AppState>, task_id: String) -> Result<bool, String> {
     let url = format!("{}/cancel/{}", state.fastapi_base(), task_id);
     let resp = state
         .http
@@ -225,12 +259,7 @@ pub async fn open_output_dir() -> Result<String, String> {
 
 /// 每 1.5s 轮询 FastAPI /task/{id}，把状态 emit 给前端；
 /// 任务进入终态（completed/failed/cancelled）后停止轮询并 emit 终态事件。
-async fn poll_task_progress(
-    app: AppHandle,
-    http: reqwest::Client,
-    base: String,
-    task_id: String,
-) {
+async fn poll_task_progress(app: AppHandle, http: reqwest::Client, base: String, task_id: String) {
     let url = format!("{base}/task/{task_id}");
     let mut elapsed = 0u64;
     let timeout = 600u64; // 10 分钟超时（与 config.py task_timeout 对齐）
@@ -284,12 +313,19 @@ fn parse_task_status(task_id: &str, v: &serde_json::Value) -> TaskStatus {
         task_id: task_id.to_string(),
         state: state.clone(),
         progress: v.get("progress").and_then(|p| p.as_u64()).unwrap_or(0) as u8,
-        step: v.get("step").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        step: v
+            .get("step")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
         output_path: v
             .get("output_path")
             .and_then(|o| o.as_str())
             .map(|s| s.to_string()),
-        error: v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string()),
+        error: v
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map(|s| s.to_string()),
     }
 }
 
@@ -334,6 +370,9 @@ fn _init_progress_marker() -> InitProgress {
 
 /// 启动后端并触发完整启动流程（非首次启动）
 /// 首次启动时需先调用 init_app 完成初始化，再调用此命令
+///
+/// ComfyUI 缺失时跳过（仅 warning），FastAPI 必启；启动监控任务（ComfyUI 缺失
+/// 时监控会自然跳过 comfyui 相关指标）。
 #[tauri::command]
 pub async fn start_backend_full(
     app: AppHandle,
@@ -349,35 +388,31 @@ pub async fn start_backend_full(
     let mgr = state.proc_mgr.read().await;
     let mgr_ref: &ProcessManager = &mgr;
 
-    // 1) 启动 ComfyUI
-    mgr_ref.start_comfyui(&app).await?;
-    broadcast(&app, "ComfyUI 启动中...").await;
+    // 1) 启动 ComfyUI（可选）
+    if let Some(spawn_result) = mgr_ref.start_comfyui(&app).await {
+        match spawn_result {
+            Ok(_) => {
+                broadcast(&app, "ComfyUI 启动中...").await;
+                mgr_ref
+                    .wait_until_healthy(ProcKind::ComfyUI, &app, Duration::from_secs(120))
+                    .await?;
+                broadcast(&app, "ComfyUI 就绪").await;
 
-    // 2) 等 ComfyUI 健康（模型加载可能较慢，给 120s）
-    mgr_ref
-        .wait_until_healthy(ProcKind::ComfyUI, &app, Duration::from_secs(120))
-        .await?;
-    broadcast(&app, "ComfyUI 就绪").await;
-
-    // 3) 检查 ComfyUI WebSocket 就绪
-    let ws_ready = mgr_ref.check_comfyui_ws_ready(&app).await;
-    if ws_ready {
-        log::info!("[backend] ComfyUI WebSocket 已就绪");
+                // 检查 WebSocket 就绪（仅 warning，不阻断）
+                let _ws_ready = mgr_ref.check_comfyui_ws_ready(&app).await;
+            }
+            Err(e) => {
+                log::warn!("[backend] ComfyUI 启动失败，将继续启动 FastAPI: {e}");
+            }
+        }
     } else {
-        log::warn!("[backend] ComfyUI WebSocket 暂未就绪，将在后续监控中重试");
+        log::warn!("[backend-full] ComfyUI 不可用，跳过（FastAPI 将独立启动）");
     }
 
-    // 4) 启动 FastAPI
-    mgr_ref.start_fastapi(&app).await?;
-    broadcast(&app, "FastAPI 启动中...").await;
+    // 2) FastAPI 必启（带重试）
+    start_backend_light(mgr_ref, &app).await?;
 
-    // 5) 等 FastAPI 健康
-    mgr_ref
-        .wait_until_healthy(ProcKind::FastAPI, &app, Duration::from_secs(30))
-        .await?;
-    broadcast(&app, "后端全部就绪").await;
-
-    // 6) 启动后台监控任务（内存/CPU 轮询 + WebSocket 状态检查）
+    // 3) 启动后台监控任务（ComfyUI 缺失时仅监控 FastAPI）
     mgr_ref.start_monitoring(app.clone()).await;
     log::info!("[backend] 后台监控任务已启动");
 
@@ -386,9 +421,7 @@ pub async fn start_backend_full(
 
 /// 获取 ComfyUI/FastAPI 双进程实时状态（含内存/CPU/WS 状态）
 #[tauri::command]
-pub async fn get_process_status(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_process_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let mgr = state.proc_mgr.read().await;
     let (cui, fapi) = mgr.snapshot().await;
     Ok(serde_json::json!({
@@ -426,7 +459,7 @@ const MAX_VIDEO_SIZE: u64 = 200 * 1024 * 1024;
 /// 允许的上传文件扩展名白名单
 const ALLOWED_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "bmp", // 图片
-    "mp4", "mov", "avi", "mkv", "webm",   // 视频
+    "mp4", "mov", "avi", "mkv", "webm", // 视频
 ];
 
 /// 接收前端传来的 base64 编码文件，保存到本地 uploads/{task_id}/{filename}
@@ -450,7 +483,12 @@ pub async fn upload_file(
     let (max_size, type_label) = match file_type.as_str() {
         "image" => (MAX_IMAGE_SIZE, "图片"),
         "video" => (MAX_VIDEO_SIZE, "视频"),
-        _ => return Err(format!("不支持的文件类型: {}（仅支持 image/video）", file_type)),
+        _ => {
+            return Err(format!(
+                "不支持的文件类型: {}（仅支持 image/video）",
+                file_type
+            ))
+        }
     };
 
     // 2) 扩展名白名单校验
@@ -458,7 +496,10 @@ pub async fn upload_file(
         .ok_or_else(|| "文件名缺失扩展名".to_string())?
         .to_lowercase();
     if !ALLOWED_EXTENSIONS.contains(&ext.as_str()) {
-        return Err(format!("不允许的文件扩展名: .{ext}（仅允许: {}）", ALLOWED_EXTENSIONS.join(", ")));
+        return Err(format!(
+            "不允许的文件扩展名: .{ext}（仅允许: {}）",
+            ALLOWED_EXTENSIONS.join(", ")
+        ));
     }
 
     // 3) 剥离 data URL 前缀
@@ -521,7 +562,12 @@ pub async fn move_uploaded_file(
     let (max_size, type_label) = match file_type.as_str() {
         "image" => (MAX_IMAGE_SIZE, "图片"),
         "video" => (MAX_VIDEO_SIZE, "视频"),
-        _ => return Err(format!("不支持的文件类型: {}（仅支持 image/video）", file_type)),
+        _ => {
+            return Err(format!(
+                "不支持的文件类型: {}（仅支持 image/video）",
+                file_type
+            ))
+        }
     };
 
     // 2) 校验源文件存在且读取元数据
@@ -529,8 +575,7 @@ pub async fn move_uploaded_file(
     if !source_path.exists() {
         return Err(format!("源文件不存在: {source}"));
     }
-    let meta = std::fs::metadata(&source_path)
-        .map_err(|e| format!("读取源文件元数据失败: {e}"))?;
+    let meta = std::fs::metadata(&source_path).map_err(|e| format!("读取源文件元数据失败: {e}"))?;
 
     // 3) 大小限制
     let max_mb = max_size / (1024 * 1024);
@@ -559,7 +604,11 @@ pub async fn move_uploaded_file(
     let safe_name = match filename {
         Some(name) => sanitize_filename(&name),
         None => {
-            let orig = source_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let orig = source_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             sanitize_filename(&orig)
         }
     };
@@ -568,8 +617,7 @@ pub async fn move_uploaded_file(
     let task_dir = crate::paths::upload_task_dir(&task_id)?;
     let dest_path = task_dir.join(&safe_name);
 
-    std::fs::copy(&source_path, &dest_path)
-        .map_err(|e| format!("复制文件失败: {e}"))?;
+    std::fs::copy(&source_path, &dest_path).map_err(|e| format!("复制文件失败: {e}"))?;
 
     log::info!(
         "[move_uploaded] 文件移动成功: source={} → dest={}, size={}B",
@@ -625,10 +673,7 @@ pub async fn listen_progress(
 /// 参数：task_id — 任务 ID
 /// 返回：true 表示成功停止
 #[tauri::command]
-pub async fn stop_progress(
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<bool, String> {
+pub async fn stop_progress(state: State<'_, AppState>, task_id: String) -> Result<bool, String> {
     let mut handles = state.progress_handles.write().await;
     if let Some((handle, cancel)) = handles.remove(&task_id) {
         // 通知循环退出 + 直接 abort 任务
@@ -789,14 +834,19 @@ fn strip_data_url_prefix(input: &str) -> String {
 /// 获取文件扩展名
 fn get_extension(filename: &str) -> Option<String> {
     let path = std::path::Path::new(filename);
-    path.extension().and_then(|e| e.to_str()).map(|s| s.to_string())
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_string())
 }
 
 /// 清理文件名，移除路径分隔符和危险字符
 fn sanitize_filename(name: &str) -> String {
     // 移除路径分隔符，只保留文件名
     let path = std::path::Path::new(name);
-    let file_part = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(name.to_string());
+    let file_part = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or(name.to_string());
 
     // 移除危险字符：仅保留字母、数字、下划线、连字符、点号、中文字符
     let cleaned: String = file_part

@@ -9,8 +9,8 @@
 //! 通过 Tauri 事件 init://progress 推送进度到前端，前端显示引导界面。
 //! 完成后写入 first_launch 标记文件，后续启动跳过本流程。
 use crate::events::{event_name, InitProgress};
-use crate::process_manager::{ProcKind, ProcessManager};
 use crate::paths;
+use crate::process_manager::{ProcKind, ProcessManager};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -28,9 +28,8 @@ const FIRST_LAUNCH_FLAG: &str = ".first_launch_done";
 
 /// 首次启动标记目录
 fn first_launch_flag_path() -> std::io::Result<PathBuf> {
-    let data_dir = paths::user_data_dir().map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-    })?;
+    let data_dir = paths::user_data_dir()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let flag_dir = data_dir.join("config");
     Ok(flag_dir)
 }
@@ -65,10 +64,10 @@ pub async fn mark_first_launch_done() -> std::io::Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InitStage {
-    CheckEnv,      // stage 1: 检查环境
-    ExtractModel,  // stage 2: 解压模型
-    VerifyFiles,   // stage 3: 验证文件
-    StartBackend,  // stage 4: 启动服务
+    CheckEnv,     // stage 1: 检查环境
+    ExtractModel, // stage 2: 解压模型
+    VerifyFiles,  // stage 3: 验证文件
+    StartBackend, // stage 4: 启动服务
 }
 
 impl InitStage {
@@ -102,10 +101,10 @@ pub struct InitState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InitRunStatus {
-    NotStarted,  // 未开始
-    Running,     // 进行中
-    Completed,   // 已完成
-    Failed,      // 失败
+    NotStarted, // 未开始
+    Running,    // 进行中
+    Completed,  // 已完成
+    Failed,     // 失败
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,7 +237,13 @@ async fn run_stage_1_check_env(
 
     // 检查 Python
     let py = paths::python_executable();
-    set_stage(init_status, &InitStage::CheckEnv, 20, "检查 Python 解释器...").await;
+    set_stage(
+        init_status,
+        &InitStage::CheckEnv,
+        20,
+        "检查 Python 解释器...",
+    )
+    .await;
     match py {
         Ok(_) => log::info!("[init] Python 解释器存在"),
         Err(e) => return Err(format!("Python 解释器缺失: {e}")),
@@ -295,24 +300,24 @@ async fn run_stage_2_extract_model(
     let has_archives = archive_dir.exists()
         && std::fs::read_dir(&archive_dir)
             .map(|r| {
-                r.filter_map(|e| e.ok())
-                    .any(|e| {
-                        e.path()
-                            .extension()
-                            .map(|ext| {
-                                matches!(
-                                    ext.to_string_lossy().as_ref(),
-                                    "zip" | "7z" | "tar"
-                                )
-                            })
-                            .unwrap_or(false)
-                    })
+                r.filter_map(|e| e.ok()).any(|e| {
+                    e.path()
+                        .extension()
+                        .map(|ext| matches!(ext.to_string_lossy().as_ref(), "zip" | "7z" | "tar"))
+                        .unwrap_or(false)
+                })
             })
             .unwrap_or(false);
 
     if !has_archives {
         log::info!("[init] 无待解压模型，跳过 stage 2");
-        set_stage(init_status, &InitStage::ExtractModel, 100, "无待解压模型，跳过").await;
+        set_stage(
+            init_status,
+            &InitStage::ExtractModel,
+            100,
+            "无待解压模型，跳过",
+        )
+        .await;
         emit_init_progress(app, &InitStage::ExtractModel, 100, "无待解压模型").await;
         return Ok(());
     }
@@ -333,7 +338,13 @@ async fn run_stage_2_extract_model(
         } else {
             0
         };
-        set_stage(init_status, &InitStage::ExtractModel, percent, "正在解压模型...").await;
+        set_stage(
+            init_status,
+            &InitStage::ExtractModel,
+            percent,
+            "正在解压模型...",
+        )
+        .await;
         emit_init_progress(app, &InitStage::ExtractModel, percent, "正在解压模型...").await;
 
         if percent >= 90 || retries >= max_retries {
@@ -377,13 +388,7 @@ async fn run_stage_3_verify_files(
         "正在验证文件完整性...",
     )
     .await;
-    emit_init_progress(
-        app,
-        &InitStage::VerifyFiles,
-        0,
-        "正在验证文件完整性...",
-    )
-    .await;
+    emit_init_progress(app, &InitStage::VerifyFiles, 0, "正在验证文件完整性...").await;
 
     let checks = vec![
         ("Python 解释器", paths::python_executable().is_ok()),
@@ -432,14 +437,14 @@ async fn run_stage_4_start_backend(
     init_status: &Arc<Mutex<InitStatus>>,
     proc_mgr: &RwLock<ProcessManager>,
 ) -> Result<(), String> {
-    set_stage(init_status, &InitStage::StartBackend, 0, "正在启动 ComfyUI...").await;
-    emit_init_progress(
-        app,
+    set_stage(
+        init_status,
         &InitStage::StartBackend,
         0,
         "正在启动 ComfyUI...",
     )
     .await;
+    emit_init_progress(app, &InitStage::StartBackend, 0, "正在启动 ComfyUI...").await;
 
     let max_retries = 3;
     for attempt in 1..=max_retries {
@@ -461,21 +466,24 @@ async fn run_stage_4_start_backend(
         {
             let mgr = proc_mgr.read().await;
             let spawn_result = mgr.start_comfyui(app).await;
-            if spawn_result.is_err() && attempt < max_retries {
-                log::warn!(
-                    "[init] ComfyUI 启动失败，{} 秒后重试: {}",
-                    attempt * 5,
-                    spawn_result.unwrap_err()
-                );
+
+            // 若 ComfyUI 不可用（NEXUS_MANAGE_COMFYUI=false 或目录缺失），
+            // 不重试——直接跳过 ComfyUI 段，进入 FastAPI 启动（ComfyUI 缺失
+            // 不会自愈，重试无意义；FastAPI 注册/登录不受影响）
+            if spawn_result.is_none() {
+                log::warn!("[init] ComfyUI 不可用，跳过（FastAPI 将独立启动，不影响注册/登录）");
                 drop(mgr);
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
+                break;
             }
-            if spawn_result.is_err() {
-                return Err(format!(
-                    "ComfyUI 启动失败（已重试 {max_retries} 次）: {}",
-                    spawn_result.unwrap_err()
-                ));
+
+            if let Err(e) = spawn_result {
+                if attempt < max_retries {
+                    log::warn!("[init] ComfyUI 启动失败，{} 秒后重试: {}", attempt * 5, e);
+                    drop(mgr);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+                return Err(format!("ComfyUI 启动失败（已重试 {max_retries} 次）: {e}"));
             }
 
             // 等待 ComfyUI 就绪
@@ -486,13 +494,7 @@ async fn run_stage_4_start_backend(
                 "等待 ComfyUI 就绪...",
             )
             .await;
-            emit_init_progress(
-                app,
-                &InitStage::StartBackend,
-                30,
-                "等待 ComfyUI 就绪...",
-            )
-            .await;
+            emit_init_progress(app, &InitStage::StartBackend, 30, "等待 ComfyUI 就绪...").await;
 
             let healthy_result = mgr
                 .wait_until_healthy(ProcKind::ComfyUI, app, Duration::from_secs(120))
@@ -521,14 +523,14 @@ async fn run_stage_4_start_backend(
         init_status,
         &InitStage::StartBackend,
         50,
-        "ComfyUI 就绪，启动 FastAPI...",
+        "ComfyUI 检查完成，启动 FastAPI...",
     )
     .await;
     emit_init_progress(
         app,
         &InitStage::StartBackend,
         50,
-        "ComfyUI 就绪，启动 FastAPI...",
+        "ComfyUI 检查完成，启动 FastAPI...",
     )
     .await;
 
@@ -542,25 +544,13 @@ async fn run_stage_4_start_backend(
             "等待 FastAPI 就绪...",
         )
         .await;
-        emit_init_progress(
-            app,
-            &InitStage::StartBackend,
-            70,
-            "等待 FastAPI 就绪...",
-        )
-        .await;
+        emit_init_progress(app, &InitStage::StartBackend, 70, "等待 FastAPI 就绪...").await;
         mgr.wait_until_healthy(ProcKind::FastAPI, app, Duration::from_secs(30))
             .await?;
     }
 
     set_stage(init_status, &InitStage::StartBackend, 100, "服务启动完成").await;
-    emit_init_progress(
-        app,
-        &InitStage::StartBackend,
-        100,
-        "服务启动完成",
-    )
-    .await;
+    emit_init_progress(app, &InitStage::StartBackend, 100, "服务启动完成").await;
     Ok(())
 }
 

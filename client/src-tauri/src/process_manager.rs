@@ -33,8 +33,8 @@ const MONITOR_INTERVAL_SECS: u64 = 30;
 
 /// 单个被托管子进程
 pub struct ManagedProcess {
-    pub name: String,            // "comfyui" | "fastapi"
-    pub child: Option<Child>,    // 进程句柄
+    pub name: String,         // "comfyui" | "fastapi"
+    pub child: Option<Child>, // 进程句柄
     pub state: ProcState,
     pub started_at: Option<Instant>,
     pub restart_count: u32,
@@ -87,28 +87,63 @@ impl ProcessManager {
     /// 启动 ComfyUI 子进程（带最多 3 次自动重启）
     /// 命令：python main.py --headless --port 8188 --windows-foreground
     /// cwd ：resources/comfyui/
-    pub async fn start_comfyui(&self, app: &AppHandle) -> Result<(), String> {
-        let python = crate::paths::python_executable().map_err(|e| e.to_string())?;
-        let main_py = crate::paths::comfyui_entry().map_err(|e| e.to_string())?;
-        let cwd = crate::paths::comfyui_dir().map_err(|e| e.to_string())?;
+    ///
+    /// 返回类型 `Option<Result<(), String>>`：
+    ///   - `None`              — ComfyUI 不可用（NEXUS_MANAGE_COMFYUI=false 或目录缺失），
+    ///                           非致命，调用方可跳过，继续启动 FastAPI
+    ///   - `Some(Ok(()))`     — 正常启动
+    ///   - `Some(Err(msg))`   — 启动过程中出错（值得重试）
+    pub async fn start_comfyui(&self, app: &AppHandle) -> Option<Result<(), String>> {
+        // 若环境变量明确禁止管理 ComfyUI，直接跳过（非致命）
+        if std::env::var("NEXUS_MANAGE_COMFYUI").map_or(false, |v| v.eq_ignore_ascii_case("false"))
+        {
+            log::warn!(
+                "[comfyui] NEXUS_MANAGE_COMFYUI=false，跳过 ComfyUI 拉起（仅 warning，不阻断 FastAPI）"
+            );
+            return None;
+        }
 
-        self.spawn_with_retry(
-            &self.comfyui,
-            app,
-            SpawnSpec {
-                program: python.to_string_lossy().to_string(),
-                args: vec![
-                    main_py.to_string_lossy().to_string(),
-                    "--headless".into(),
-                    "--port".into(),
-                    "8188".into(),
-                    "--windows-foreground".into(),
-                ],
-                cwd: Some(cwd),
-                envs: comfyui_env(),
-            },
+        // ComfyUI 目录不存在则跳过（打包版只含轻量 API，不含 comfyui 依赖）
+        let cwd = match crate::paths::comfyui_dir() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!(
+                    "[comfyui] 未找到 ComfyUI 目录，跳过（FastAPI 将独立启动）: {}",
+                    e
+                );
+                return None;
+            }
+        };
+
+        let main_py = match crate::paths::comfyui_entry() {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("[comfyui] 未找到 ComfyUI 入口 main.py，跳过: {}", e);
+                return None;
+            }
+        };
+
+        let python = crate::paths::python_executable().map_err(|e| e.to_string())?;
+
+        Some(
+            self.spawn_with_retry(
+                &self.comfyui,
+                app,
+                SpawnSpec {
+                    program: python.to_string_lossy().to_string(),
+                    args: vec![
+                        main_py.to_string_lossy().to_string(),
+                        "--headless".into(),
+                        "--port".into(),
+                        "8188".into(),
+                        "--windows-foreground".into(),
+                    ],
+                    cwd: Some(cwd),
+                    envs: comfyui_env(),
+                },
+            )
+            .await,
         )
-        .await
     }
 
     /// 启动 FastAPI 子进程
@@ -125,7 +160,10 @@ impl ProcessManager {
         envs.insert("NEXUS_HOST".into(), "127.0.0.1".into());
         envs.insert("NEXUS_PORT".into(), "9881".into());
         envs.insert("NEXUS_COMFYUI_PORT".into(), "8188".into());
-        envs.insert("NEXUS_COMFYUI_BASE_URL".into(), "http://127.0.0.1:8188".into());
+        envs.insert(
+            "NEXUS_COMFYUI_BASE_URL".into(),
+            "http://127.0.0.1:8188".into(),
+        );
         envs.insert(
             "NEXUS_WORKFLOWS_DIR".into(),
             crate::paths::workflows_dir()
@@ -161,11 +199,7 @@ impl ProcessManager {
                     let mut p = proc_arc.lock().await;
                     if let Some(child) = p.child.as_mut() {
                         let _ = child.start_kill();
-                        let _ = tokio::time::timeout(
-                            Duration::from_secs(5),
-                            child.wait(),
-                        )
-                        .await;
+                        let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
                     }
                     p.child = None;
                     p.state = ProcState::Restarting;
@@ -175,10 +209,12 @@ impl ProcessManager {
                     p.cpu_percent = None;
                 }
                 emit_status(app);
-                log::warn!("[{proc_name}] 第 {attempt}/{max_attempts} 次尝试重启...",
+                log::warn!(
+                    "[{proc_name}] 第 {attempt}/{max_attempts} 次尝试重启...",
                     proc_name = proc_arc.lock().await.name,
                     attempt = attempt,
-                    max_attempts = max_attempts);
+                    max_attempts = max_attempts
+                );
                 tokio::time::sleep(Duration::from_secs(RESTART_DELAY_SECS)).await;
             }
 
@@ -194,12 +230,23 @@ impl ProcessManager {
                     .wait_until_healthy(kind, app, Duration::from_secs(60))
                     .await;
                 if healthy.is_ok() {
-                    log::info!("[{}] 启动成功（第 {attempt} 次尝试）", proc_arc.lock().await.name);
+                    log::info!(
+                        "[{}] 启动成功（第 {attempt} 次尝试）",
+                        proc_arc.lock().await.name
+                    );
                     return Ok(());
                 }
-                log::warn!("[{}] 第 {attempt} 次启动未就绪: {}", proc_arc.lock().await.name, healthy.unwrap_err());
+                log::warn!(
+                    "[{}] 第 {attempt} 次启动未就绪: {}",
+                    proc_arc.lock().await.name,
+                    healthy.unwrap_err()
+                );
             } else {
-                log::warn!("[{}] 第 {attempt} 次 spawn 失败: {}", proc_arc.lock().await.name, result.unwrap_err());
+                log::warn!(
+                    "[{}] 第 {attempt} 次 spawn 失败: {}",
+                    proc_arc.lock().await.name,
+                    result.unwrap_err()
+                );
             }
         }
         Err(format!(
@@ -374,8 +421,14 @@ impl ProcessManager {
                     let cui = comfyui_arc.lock().await;
                     let fapi = fastapi_arc.lock().await;
                     (
-                        cui.child.as_ref().map(|c| c.stdout.is_some()).unwrap_or(false),
-                        fapi.child.as_ref().map(|c| c.stdout.is_some()).unwrap_or(false),
+                        cui.child
+                            .as_ref()
+                            .map(|c| c.stdout.is_some())
+                            .unwrap_or(false),
+                        fapi.child
+                            .as_ref()
+                            .map(|c| c.stdout.is_some())
+                            .unwrap_or(false),
                     )
                 };
 
@@ -434,7 +487,10 @@ impl ProcessManager {
 
     /// 探测两个进程当前状态（供 command 查询）
     pub async fn snapshot(&self) -> (ManagedProcessSnapshot, ManagedProcessSnapshot) {
-        (self.get(ProcKind::ComfyUI).await, self.get(ProcKind::FastAPI).await)
+        (
+            self.get(ProcKind::ComfyUI).await,
+            self.get(ProcKind::FastAPI).await,
+        )
     }
 
     // ========================================================================
@@ -534,7 +590,12 @@ fn comfyui_env() -> HashMap<String, String> {
 // 逐行读 stdout/stderr，emit backend://log 事件给前端
 // 参数 pipe 接受 ChildStdout 或 ChildStderr（两者都实现了 AsyncRead）
 // Unpin 约束：BufReader::read_line 要求底层 Reader 实现 Unpin
-fn spawn_log_reader(app: &AppHandle, source: &str, pipe: impl tokio::io::AsyncRead + Send + Unpin + 'static, level: &str) {
+fn spawn_log_reader(
+    app: &AppHandle,
+    source: &str,
+    pipe: impl tokio::io::AsyncRead + Send + Unpin + 'static,
+    level: &str,
+) {
     let source = source.to_string();
     let level = level.to_string();
     let app = app.clone();
@@ -589,15 +650,16 @@ fn emit_status(app: &AppHandle) {
 // TCP 端口探活（ComfyUI 用）
 async fn probe_tcp(host: &str, port: u16) -> bool {
     use tokio::net::TcpStream;
-    TcpStream::connect(format!("{host}:{port}"))
-        .await
-        .is_ok()
+    TcpStream::connect(format!("{host}:{port}")).await.is_ok()
 }
 
 // HTTP 探活（FastAPI 用，请求 /health，2xx 视为就绪）
 async fn probe_http(host: &str, port: u16, path: &str) -> bool {
     let url = format!("http://{host}:{port}{path}");
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(3)).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
         Ok(c) => c,
         Err(_) => return false,
     };
