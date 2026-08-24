@@ -148,6 +148,14 @@ jobs:
             patchelf \
             build-essential
 
+      - name: 创建后端资源占位目录（让 Tauri build script 不报错）
+        # Tauri v2 的 build script 会检查 bundle.resources 配置的路径存在性，
+        # 但 ci.yml 的 CI 阶段不打包，只需占位即可。
+        run: |
+          mkdir -p resources/python_env/bin
+          mkdir -p resources/backend
+          touch resources/python_env/.gitkeep resources/backend/.gitkeep
+
       - name: 编译 Rust 代码（不含 Tauri 打包）
         run: |
           cd client/src-tauri
