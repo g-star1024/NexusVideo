@@ -37,13 +37,51 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import settings
 from exceptions import NexusError
-from core.process_manager import process_manager
-from core.comfyui_client import comfyui_client
-from core.comfyui_ws import ws_listener
-from core.task_manager import task_manager
-from core.inference_router import inference_router
 
-from routers import generate, task, system, progress, upload, auth, cloud_forward
+# ================================================================
+# ComfyUI / 推理相关模块：可选加载（防御性，绝不阻塞注册/登录）
+# ----------------------------------------------------------------
+# P0：打包版后端（requirements-pack.txt 不含 torch / comfyui 运行时）下，
+# 这些模块仅依赖 httpx / websockets / psutil 等轻量依赖，可正常 import；
+# 但仍用 try/except 兜底——一旦未来引入重型依赖（如 torch）缺失，
+# 认证链路也绝不崩溃，而是降级为"纯认证模式"。
+#
+# 同时读取 NEXUS_MANAGE_COMFYUI：为 false 时（Tauri/Rust 侧已接管 ComfyUI
+# 生命周期，见 client/src-tauri/src/process_manager.rs），启动阶段不再尝试
+# 拉起 ComfyUI 子进程，避免无效进程与日志噪声。
+# ================================================================
+import os
+
+MANAGE_COMFYUI = os.getenv("NEXUS_MANAGE_COMFYUI", "true").lower() not in (
+    "false", "0", "no", "off"
+)
+
+comfyui_modules_available = False
+try:
+    from core.process_manager import process_manager
+    from core.comfyui_client import comfyui_client
+    from core.comfyui_ws import ws_listener
+    from core.task_manager import task_manager
+    from core.inference_router import inference_router
+
+    # 推理 / 生成相关路由（依赖上述 comfyui core 模块）
+    from routers import (  # noqa: F401
+        cloud_forward,
+        generate,
+        progress,
+        system,
+        task,
+        upload,
+    )
+    comfyui_modules_available = True
+except Exception as e:  # pragma: no cover - 防御性兜底
+    logger.warning(
+        "ComfyUI/推理模块加载失败，将以纯认证模式运行"
+        "（注册/登录不受影响）：%s", e
+    )
+
+# 认证路由：始终加载（不依赖 ComfyUI / torch）
+from routers import auth  # noqa: F401
 
 
 # ================================================================
@@ -96,49 +134,59 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"用户数据库初始化失败（将使用无鉴权模式）：{e}")
 
-    # --- 启动阶段 ---
-    try:
-        # 自动启动 ComfyUI（白皮书 4.1：让 ComfyUI 成为"沉默的仆人"）
-        logger.info("正在启动 ComfyUI 推理引擎...")
-        port = await process_manager.start()
-        logger.info(f"ComfyUI 已就绪，运行在端口 {port}")
-    except Exception as e:
-        logger.error(f"ComfyUI 自动启动失败：{e}")
-        logger.warning(
-            "FastAPI 将以降级模式运行，请手动启动 ComfyUI 或检查配置。"
-            "可通过 POST /comfyui/start 手动重试。"
-        )
+    # --- 启动阶段（仅当 ComfyUI 模块可用且由本服务接管时） ---
+    if comfyui_modules_available and MANAGE_COMFYUI:
+        try:
+            # 自动启动 ComfyUI（白皮书 4.1：让 ComfyUI 成为"沉默的仆人"）
+            logger.info("正在启动 ComfyUI 推理引擎...")
+            port = await process_manager.start()
+            logger.info(f"ComfyUI 已就绪，运行在端口 {port}")
+        except Exception as e:
+            logger.error(f"ComfyUI 自动启动失败：{e}")
+            logger.warning(
+                "FastAPI 将以降级模式运行，请手动启动 ComfyUI 或检查配置。"
+                "可通过 POST /comfyui/start 手动重试。"
+            )
 
-    logger.info("NexusVideo FastAPI 服务就绪，等待前端请求...")
-    # 启动后台协程持续监听 ComfyUI 的实时进度事件
-    # 当 WebSocket 连接失败时自动重连，不阻塞主服务
-    try:
-        logger.info("启动 ComfyUI WebSocket 进度监听器...")
-        ws_task = asyncio.create_task(ws_listener.connect())
-        app.state.ws_task = ws_task
-        logger.info("ComfyUI WebSocket 进度监听器已启动")
-    except Exception as e:
-        logger.error(f"WebSocket 监听器启动失败：{e}")
-        logger.warning("进度文案化推送将降级为 HTTP 轮询（/progress/status/{task_id}）")
+        logger.info("NexusVideo FastAPI 服务就绪，等待前端请求...")
+        # 启动后台协程持续监听 ComfyUI 的实时进度事件
+        # 当 WebSocket 连接失败时自动重连，不阻塞主服务
+        try:
+            logger.info("启动 ComfyUI WebSocket 进度监听器...")
+            ws_task = asyncio.create_task(ws_listener.connect())
+            app.state.ws_task = ws_task
+            logger.info("ComfyUI WebSocket 进度监听器已启动")
+        except Exception as e:
+            logger.error(f"WebSocket 监听器启动失败：{e}")
+            logger.warning("进度文案化推送将降级为 HTTP 轮询（/progress/status/{task_id}）")
+    else:
+        if not MANAGE_COMFYUI:
+            logger.info(
+                "NEXUS_MANAGE_COMFYUI=false：跳过 ComfyUI 拉起"
+                "（由 Tauri/Rust 侧接管 ComfyUI 生命周期）。"
+            )
+        else:
+            logger.info("ComfyUI 模块不可用：仅以认证模式运行，跳过推理引擎启动。")
 
     yield  # === 应用运行期 ===
 
     # --- 停止阶段 ---
     logger.info("NexusVideo FastAPI 正在关闭...")
-    try:
-        # 优雅关闭 WebSocket 进度监听器
-        await ws_listener.stop()
-        # 取消后台协程
-        if hasattr(app.state, "ws_task"):
-            app.state.ws_task.cancel()
-            try:
-                await app.state.ws_task
-            except asyncio.CancelledError:
-                pass
-        await process_manager.stop()
-        await comfyui_client.close()
-    except Exception as e:
-        logger.error(f"关闭过程出错：{e}")
+    if comfyui_modules_available:
+        try:
+            # 优雅关闭 WebSocket 进度监听器
+            await ws_listener.stop()
+            # 取消后台协程
+            if hasattr(app.state, "ws_task"):
+                app.state.ws_task.cancel()
+                try:
+                    await app.state.ws_task
+                except asyncio.CancelledError:
+                    pass
+            await process_manager.stop()
+            await comfyui_client.close()
+        except Exception as e:
+            logger.error(f"关闭过程出错：{e}")
     logger.info("NexusVideo FastAPI 已停止")
 
 
@@ -214,15 +262,21 @@ async def generic_error_handler(request: Request, exc: Exception) -> JSONRespons
 # ================================================================
 # 注册路由
 # ================================================================
-app.include_router(generate.router)          # /generate
-app.include_router(task.router)              # /task/{task_id}
-app.include_router(system.router)            # /health, /comfyui/*, /inference/*
-app.include_router(progress.router)          # /progress/ws (WebSocket)
-app.include_router(upload.router)            # /upload/image, /upload/video
-
-# --- P2 阶段新增路由 ---
+# --- P2 阶段新增路由：认证（始终注册，不依赖 ComfyUI） ---
 app.include_router(auth.router)              # /api/v1/auth/*
-app.include_router(cloud_forward.router)     # /api/v1/cloud/*
+
+# --- 推理 / 生成相关路由：仅在 ComfyUI 模块可用时注册 ---
+if comfyui_modules_available:
+    app.include_router(generate.router)      # /generate
+    app.include_router(task.router)          # /task/{task_id}
+    app.include_router(system.router)        # /health, /comfyui/*, /inference/*
+    app.include_router(progress.router)      # /progress/ws (WebSocket)
+    app.include_router(upload.router)        # /upload/image, /upload/video
+    app.include_router(cloud_forward.router) # /api/v1/cloud/*
+else:
+    logger.warning(
+        "ComfyUI 模块不可用，已跳过推理/生成路由注册（仅保留认证能力）。"
+    )
 
 
 # ================================================================

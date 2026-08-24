@@ -1,0 +1,42 @@
+# NexusVideo 后端 - 安装包内置精简依赖（用于打包 venv）
+# Python >= 3.10
+#
+# 用途：Tauri 安装包构建时，由 scripts/build_backend_bundle.ps1 创建
+#       resources/python_env 虚拟环境并 pip install 本文件。
+#       安装包启动的是"本地注册/登录"轻量后端，不拉起 ComfyUI 推理引擎。
+#
+# 关键约束：【不含 torch】【不含任何 comfyui 运行时】。
+#   - 推理/视频生成相关重型依赖（torch、comfyui 及其定制节点）由 Rust 侧
+#     通过 NEXUS_MANAGE_COMFYUI=false 接管，或云端转发，不进打包 venv。
+#   - 这里只保留让 local_server.py 能 import 并对外提供
+#     /api/v1/auth/* 等 API 所必需的轻量依赖。
+#
+# 版本策略：沿用 backend/requirements.txt 中已锁定的版本，避免漂移。
+# 若 requirements.txt 升级版本，请同步更新本文件。
+
+# === Web 框架（FastAPI 主入口 / ASGI 服务器） ===
+fastapi==0.111.0
+uvicorn[standard]==0.30.1          # ASGI 服务器；[standard] 含 websocket 服务器侧支持
+
+# === 数据校验 / 配置 ===
+pydantic==2.7.4
+pydantic-settings==2.3.4           # config.py 的 Settings 配置管理
+
+# === HTTP 客户端（local_server 顶层 import 的 comfyui_client /
+#     task_manager / inference_router 模块需要，仅作 import 用） ===
+httpx==0.27.0                       # 异步 HTTP 客户端
+
+# === WebSocket（comfyui_ws 模块 import 需要） ===
+websockets==14.1
+
+# === 进程管理（process_manager 模块 import 需要；用于端口/进程健康检测） ===
+psutil==6.1.0
+
+# === 文件上传（图生视频 upload 路由需要） ===
+python-multipart==0.0.9
+
+# === 结构化日志（全局 logger） ===
+loguru==0.7.2
+
+# === 用户认证（bcrypt 密码哈希，core/auth.py 中按需 import） ===
+bcrypt==4.2.1
