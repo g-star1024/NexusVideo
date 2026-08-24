@@ -21,15 +21,13 @@ import { getApiBaseUrl } from './utils';
 
 // ---------- 类型定义 ----------
 
-export interface AuthToken {
-  access_token: string;
-  refresh_token?: string;
-  token_type?: string;
-  expires_in?: number;
-}
+/**
+ * 后端返回的 Token 即字符串（JWT）。统一为 string，去掉 .access_token 访问。
+ */
+export type AuthToken = string;
 
 export interface AuthUser {
-  id: string;
+  id: string | number;
   phone: string;
   username?: string;
   avatar?: string;
@@ -54,6 +52,17 @@ export interface QuotaResponse {
   used_today: number;
 }
 
+/**
+ * 注册 / 登录 / 刷新返回体中 data 字段的真实结构（以 backend/routers/auth.py 的
+ * TokenResponse 为准）：token 是「字符串」，user.id 是「数字」。
+ */
+export interface RawAuthData {
+  token: string;
+  token_type?: string;
+  expires_in?: number;
+  user: AuthUser;
+}
+
 // ---------- 内部工具 ----------
 
 /** 获取当前 Token（from localStorage） */
@@ -62,12 +71,9 @@ export function getToken(): string | null {
   return t || null;
 }
 
-/** 保存 Token 到 localStorage */
+/** 保存 Token（字符串）到 localStorage */
 export function setToken(token: AuthToken): void {
-  localStorage.setItem('nexus_token', token.access_token);
-  if (token.refresh_token) {
-    localStorage.setItem('nexusvideo_refresh_token', token.refresh_token);
-  }
+  localStorage.setItem('nexus_token', token);
 }
 
 /** 清除所有认证信息 */
@@ -117,7 +123,47 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
 }
 
 /**
- * 通用 API 请求（自动附加 Token + 401 自动刷新）
+ * 解析后端统一信封 {success, error_code, message, data}
+ * - 成功响应：返回 data
+ * - 错误响应（FastAPI HTTPException）：body 为 {detail:{success, error_code, message}}，返回 detail
+ * - 其它：原样返回
+ */
+function unwrapEnvelope<T>(body: any): T {
+  if (body && typeof body === 'object' && 'data' in body) {
+    return body.data as T;
+  }
+  if (body && typeof body === 'object' && 'detail' in body) {
+    return body.detail as T;
+  }
+  return body as T;
+}
+
+/**
+ * 提取错误响应中的可读信息（兼容 {detail:{message}} / {detail:string} / {message} / 纯文本）
+ */
+async function extractErrorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body?.detail?.message) return body.detail.message;
+    if (body?.detail) return typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+    if (body?.message) return body.message;
+    return JSON.stringify(body);
+  } catch {
+    try {
+      return (await res.text()) || res.statusText;
+    } catch {
+      return res.statusText;
+    }
+  }
+}
+
+/**
+ * 通用 API 请求（自动附加 Token + 解包信封 + 401 自动刷新 + 网络错误捕获）
+ *
+ * 约定（以 backend/routers/auth.py 为准）：
+ *   - 成功响应统一信封，真实数据在 .data
+ *   - 失败响应为 FastAPI HTTPException，可读信息在 .detail.message
+ *   - 连接级失败（后端未启动 / 地址不可达 / CORS / 断网）抛 Error('无法连接服务器，请确认本地服务已启动（127.0.0.1:9881）')
  */
 async function apiRequest<T>(
   path: string,
@@ -138,10 +184,18 @@ async function apiRequest<T>(
     }
   }
 
-  const res = await fetch(url, {
-    ...fetchOptions,
-    headers,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...fetchOptions,
+      headers,
+    });
+  } catch (e) {
+    // 网络层失败：fetch 直接抛 TypeError: Failed to fetch / ECONNREFUSED 等。
+    // 不要将裸 TypeError 直接甩给用户，统一为友好提示。
+    void e;
+    throw new Error('无法连接服务器，请确认本地服务已启动（127.0.0.1:9881）');
+  }
 
   if (res.status === 401) {
     // 尝试刷新 Token
@@ -158,39 +212,45 @@ async function apiRequest<T>(
     };
     retryHeaders['Authorization'] = `Bearer ${getToken() || ''}`;
 
-    const retryRes = await fetch(url, {
-      ...fetchOptions,
-      headers: retryHeaders,
-    });
+    let retryRes: Response;
+    try {
+      retryRes = await fetch(url, {
+        ...fetchOptions,
+        headers: retryHeaders,
+      });
+  } catch (e) {
+    throw new Error('无法连接服务器，请确认本地服务已启动（127.0.0.1:9881）');
+  }
     if (!retryRes.ok) {
-      const err = await retryRes.text();
+      const err = await extractErrorDetail(retryRes);
       throw new Error(`${retryRes.status}: ${err}`);
     }
-    return (await retryRes.json()) as T;
+    return unwrapEnvelope<T>(await retryRes.json());
   }
 
   if (!res.ok) {
-    const err = await res.text();
+    const err = await extractErrorDetail(res);
     throw new Error(`${res.status}: ${err}`);
   }
-  return (await res.json()) as T;
+  return unwrapEnvelope<T>(await res.json());
 }
 
-/** 尝试刷新 Token */
+/** 尝试刷新 Token（后端 /refresh 吃当前 access_token，无需独立 refresh_token） */
 async function tryRefreshToken(): Promise<boolean> {
-  const refreshToken = localStorage.getItem('nexusvideo_refresh_token');
-  if (!refreshToken) return false;
+  const token = getToken();
+  if (!token) return false;
 
   try {
     const url = `${getApiBaseUrl()}/api/v1/auth/refresh`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token: refreshToken }),
+      body: JSON.stringify({ access_token: token }),
     });
     if (!res.ok) return false;
-    const data = (await res.json()) as RefreshResponse;
+    const data = unwrapEnvelope<RawAuthData>(await res.json());
     setToken(data.token);
+    setUser(data.user);
     return true;
   } catch {
     return false;
@@ -206,14 +266,17 @@ async function tryRefreshToken(): Promise<boolean> {
  * returns: { token, user }
  */
 export async function register(phone: string, password: string): Promise<AuthResponse> {
-  const data = await apiRequest<AuthResponse>('/api/v1/auth/register', {
+  const data = await apiRequest<RawAuthData>('/api/v1/auth/register', {
     method: 'POST',
     skipAuth: true,
     body: JSON.stringify({ phone, password }),
   });
   setToken(data.token);
   setUser(data.user);
-  return data;
+  return {
+    token: data.token,
+    user: data.user,
+  };
 }
 
 /**
@@ -223,14 +286,17 @@ export async function register(phone: string, password: string): Promise<AuthRes
  * returns: { token, user }
  */
 export async function login(phone: string, password: string): Promise<AuthResponse> {
-  const data = await apiRequest<AuthResponse>('/api/v1/auth/login', {
+  const data = await apiRequest<RawAuthData>('/api/v1/auth/login', {
     method: 'POST',
     skipAuth: true,
     body: JSON.stringify({ phone, password }),
   });
   setToken(data.token);
   setUser(data.user);
-  return data;
+  return {
+    token: data.token,
+    user: data.user,
+  };
 }
 
 /**
@@ -239,10 +305,13 @@ export async function login(phone: string, password: string): Promise<AuthRespon
  * body: { access_token: string }
  */
 export async function refreshToken(): Promise<RefreshResponse> {
-  return apiRequest<RefreshResponse>('/api/v1/auth/refresh', {
+  const data = await apiRequest<RawAuthData>('/api/v1/auth/refresh', {
     method: 'POST',
     body: JSON.stringify({ access_token: getToken() }),
   });
+  setToken(data.token);
+  setUser(data.user);
+  return { token: data.token };
 }
 
 /**

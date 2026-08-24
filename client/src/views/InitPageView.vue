@@ -20,6 +20,11 @@
 <script setup lang="ts">
 import { ref, onUnmounted } from 'vue';
 
+// backendError：App.vue 传入。非空表示本地后端启动失败，此时禁用放行
+const props = defineProps<{
+  backendError?: string | null;
+}>();
+
 const emit = defineEmits<{
   ready: [];
 }>();
@@ -44,6 +49,8 @@ function onMountedInit() {
 }
 
 function handleStartCreating() {
+  // 后端未就绪（backendError 非空）时，绝不放入注册页撞墙
+  if (props.backendError) return;
   emit('ready');
 }
 
@@ -90,8 +97,14 @@ onUnmounted(() => {
 
       <button
         class="init-page__btn"
+        :class="{ 'init-page__btn--disabled': !!backendError }"
+        :disabled="!!backendError"
         @click="handleStartCreating()"
-      >开始创作</button>
+      >{{ backendError ? '本地服务未就绪' : '开始创作' }}</button>
+
+      <p v-if="backendError" class="init-page__warn">
+        本地服务启动失败，无法进入注册：{{ backendError }}。请查看日志或重启应用后再试。
+      </p>
     </div>
 
     <p class="init-page__footer">
@@ -210,6 +223,25 @@ onUnmounted(() => {
 }
 .init-page__btn:active {
   transform: scale(0.95);
+}
+.init-page__btn--disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.init-page__btn--disabled:hover {
+  box-shadow: none;
+  transform: none;
+}
+
+.init-page__warn {
+  margin-top: 16px;
+  max-width: 420px;
+  text-align: center;
+  color: #ff8a8a;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .init-page__footer {

@@ -96,7 +96,9 @@ export const useAuthStore = defineStore('auth', () => {
       return res;
     } catch (e) {
       const msg = String(e);
-      if (msg === '401: 手机号或密码错误') {
+      if (msg.includes('无法连接服务器')) {
+        error.value = '无法连接服务器，请确认本地服务已启动（127.0.0.1:9881）';
+      } else if (msg === '401: 手机号或密码错误') {
         error.value = '手机号或密码错误';
       } else if (msg === 'AUTH_EXPIRED') {
         error.value = '登录已过期，请重新登录';
@@ -123,7 +125,9 @@ export const useAuthStore = defineStore('auth', () => {
       return res;
     } catch (e) {
       const msg = String(e);
-      if (msg.includes('409')) {
+      if (msg.includes('无法连接服务器')) {
+        error.value = '无法连接服务器，请确认本地服务已启动（127.0.0.1:9881）';
+      } else if (msg.includes('409')) {
         error.value = '该手机号已注册';
       } else {
         error.value = `注册失败: ${msg}`;

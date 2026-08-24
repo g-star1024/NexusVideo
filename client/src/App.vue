@@ -43,6 +43,8 @@ const auth = useAuthStore();
 
 const appReady = ref(false);
 const showInitPage = ref(false);
+// 后端启动失败原因：非空时初始化页禁用「开始创作」放行，避免用户撞墙注册
+const backendError = ref<string | null>(null);
 const heroEntered = ref(false);
 const btnEntered = ref(false);
 const sidebarEntered = ref(false);
@@ -84,13 +86,25 @@ onMounted(async () => {
       startHeroAnimation();
     } else {
       showInitPage.value = true;
-      // 尝试自动启动后端
-      try { await startBackend(); } catch { /* 用户稍后可手动启动 */ }
+      // 尝试自动启动后端；失败则记录错误，初始化页据此禁用放行（不再静默忽略）
+      try {
+        await startBackend();
+      } catch (e) {
+        console.error('本地后端启动失败:', e);
+        backendError.value = backendErrorText(e);
+      }
     }
-  } catch {
+  } catch (e) {
+    console.error('本地后端启动失败:', e);
     showInitPage.value = true;
+    backendError.value = backendErrorText(e);
   }
 });
+
+function backendErrorText(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
 
 function startHeroAnimation() {
   // 首屏引导动画时序
@@ -120,8 +134,8 @@ onUnmounted(() => unlisteners.forEach((u) => u()));
 
 <template>
   <div class="app-shell">
-    <!-- 首次启动初始化页（后端未就绪时显示） -->
-    <InitPage v-if="showInitPage" @ready="onReadyToCreate" />
+    <!-- 首次启动初始化页（后端未就绪时显示）；backendError 非空时由页内禁用放行 -->
+    <InitPage v-if="showInitPage" :backend-error="backendError" @ready="onReadyToCreate" />
 
     <!-- 主应用壳（后端就绪后显示） -->
     <template v-else>
