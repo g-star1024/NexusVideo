@@ -206,8 +206,28 @@ jobs:
           echo "[INFO] 当前 tag/ref: $(git describe --tags --always 2>/dev/null || echo 'no-tag')"
           echo "[INFO] tauri.conf.json version:"
           python3 -c "import json; print('  ', json.load(open('client/src-tauri/tauri.conf.json'))['version'])"
+          echo "[INFO] plugins.log 配置内容:"
+          python3 -c "import json; c=json.load(open('client/src-tauri/tauri.conf.json')); print('  ', c.get('plugins',{}).get('log','NOT FOUND'))"
+
+          # 强制清理：确保不使用任何缓存的编译产物（浅克隆/缓存可能导致旧 target 残留）
           cd client/src-tauri
-          cargo tauri build
+          cargo clean 2>&1 | tail -3
+
+          echo "[INFO] 开始全新构建..."
+          cargo tauri build 2>&1
+
+          # 构建后验证：确认 exe 内嵌的配置包含修复（plugins.log = 空对象）
+          EXE="target/release/bundle/nsis/NexusVideo_"*"*_x64-setup.exe"
+          if [ -f "$EXE" ]; then
+            echo "[VERIFY] 检查 exe 中是否包含旧的 plugins.log map 配置..."
+            if strings "$EXE" 2>/dev/null | grep -q '"format".*"{timestamp}' ; then
+              echo "::error::exe 中检测到旧的 plugins.log format 字段！构建产物可能使用了错误的配置"
+              exit 1
+            fi
+            echo "[VERIFY] 通过：exe 未包含旧的 plugins.log format 配置"
+          else
+            echo "::warning::未找到 exe 文件，跳过内嵌配置验证"
+          fi
         timeout-minutes: 25
 
       - name: 签名 (Windows EV)
@@ -312,6 +332,7 @@ jobs:
         shell: bash
         run: |
           cd client/src-tauri
+          cargo clean 2>&1 | tail -2
           rustup target add ${{ steps.arch_target.outputs.cargo_target }}
           cargo tauri build --target ${{ steps.arch_target.outputs.cargo_target }}
         timeout-minutes: 30
