@@ -163,6 +163,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整克隆，确保 tag 指向正确 commit（浅克隆可能导致 checkout 错误 commit）
 
       - name: 安装 Rust stable
         uses: actions-rs/toolchain@v1
@@ -200,6 +202,10 @@ jobs:
       - name: 构建 Tauri (Windows)
         shell: bash
         run: |
+          echo "[INFO] 当前 commit: $(git rev-parse HEAD)"
+          echo "[INFO] 当前 tag/ref: $(git describe --tags --always 2>/dev/null || echo 'no-tag')"
+          echo "[INFO] tauri.conf.json version:"
+          python3 -c "import json; print('  ', json.load(open('client/src-tauri/tauri.conf.json'))['version'])"
           cd client/src-tauri
           cargo tauri build
         timeout-minutes: 25
@@ -260,6 +266,8 @@ jobs:
         arch: [x64, aarch64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整克隆，确保 tag 指向正确 commit
 
       - name: 安装 Rust stable
         uses: actions-rs/toolchain@v1
@@ -469,6 +477,12 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
         shell: bash
         run: |
+          # VERSION fallback：若 preflight 输出为空（异常情况），从 tauri.conf.json 直接读取
+          if [[ -z "$VERSION" ]]; then
+            echo "[WARN] preflight.outputs.version 为空，从 tauri.conf.json 读取版本号"
+            VERSION=$(python3 -c "import json; print(json.load(open('client/src-tauri/tauri.conf.json'))['version'])")
+          fi
+          echo "[INFO] Release 版本号: v${VERSION}"
           # 使用 $'...' 让 \n 被正确解释为换行（双引号里 \n 是字面文本）
           RELEASE_NOTES=$'## NexusVideo v'"${VERSION}"$'\n\n发布日期: '"$(date -u +%Y-%m-%d)"$'\n\n### 下载\n\n- Windows: NexusVideo_'"${VERSION}"$'_x64-setup.exe\n- macOS Intel: NexusVideo_'"${VERSION}"$'_x64.dmg\n- macOS ARM: NexusVideo_'"${VERSION}"$'_aarch64.dmg\n\n### 更新说明\n\n详见 [Release Notes](https://github.com/'"${{ github.repository}}"$'/releases/tag/v'"${VERSION}"$')'
 
