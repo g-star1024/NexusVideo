@@ -52,22 +52,84 @@ pub fn resource(sub: &str) -> NexusResult<PathBuf> {
     Ok(p)
 }
 
+/// CARGO_MANIFEST_DIR = <repo>/client/src-tauri（编译期确定，不受运行时 cwd 影响）
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// 开发期「就近资源」候选（兼顾多种本地布局，按优先级排列）：
+///   1) client/src-tauri/resources/<sub>   —— 与 CI 构建位置一致（推荐）
+///   2) client/resources/<sub>             —— CARGO_MANIFEST_DIR 的上级
+///   3) <repo>/resources/<sub>             —— resources_root() 开发期约定（repo 根）
+/// 打包后 resource() 已能命中，这些候选只在开发期（resources 未预先构建）兜底。
+fn dev_resources_candidates(sub: &str) -> Vec<PathBuf> {
+    let m = manifest_dir();
+    vec![
+        m.join("resources").join(sub),
+        m.join("../resources").join(sub),
+        m.join("../../resources").join(sub),
+    ]
+}
+
+/// 开发期仓库内 backend 候选（backend 实际位于 <repo>/backend）：
+///   1) <repo>/backend/local_server.py        —— CARGO_MANIFEST_DIR/../../backend
+///   2) client/backend/local_server.py        —— 兼容 backend 在 client/ 的布局
+fn dev_backend_candidates() -> Vec<PathBuf> {
+    let m = manifest_dir();
+    vec![
+        m.join("../../backend/local_server.py"),
+        m.join("../backend/local_server.py"),
+    ]
+}
+
+/// 在 PATH 上定位系统 Python（python3 / python）。
+/// 开发期没有预建 venv 时，用系统 Python 直接拉起 FastAPI，避免 dev 强依赖打包资源。
+fn system_python() -> NexusResult<PathBuf> {
+    for name in ["python3", "python"] {
+        // 用 --version 探测是否可用（Command::new 直接走 OS PATH 解析）
+        if std::process::Command::new(name)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Ok(PathBuf::from(name));
+        }
+    }
+    Err(NexusError::PathResolve(
+        "未找到系统 Python（python3 / python 均不在 PATH 中）。开发期请安装 Python，\
+         或在 client/src-tauri 下执行 `python -m venv resources/python_env` 构建本地 venv"
+            .into(),
+    ))
+}
+
 /// 嵌入式 Python 解释器路径
 ///   Windows: resources/python_env/python.exe
 ///   macOS:   resources/python_env/bin/python3
+///
+/// 解析顺序（「不静默失败」）：
+///   1) 打包/构建好的 venv（release 必然命中；dev 若已建好 resources 也命中）
+///   2) 开发期就近资源候选（client/src-tauri/resources、client/resources、<repo>/resources）
+///   3) 系统 PATH 上的 python3 / python（dev 不强制预建 venv 也能起后端）
 pub fn python_executable() -> NexusResult<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        resource("python_env/python.exe")
+    let sub = if cfg!(target_os = "windows") {
+        "python_env/python.exe"
+    } else {
+        "python_env/bin/python3"
+    };
+
+    // 1) 标准 resource 路径
+    if let Ok(p) = resource(sub) {
+        return Ok(p);
     }
-    #[cfg(target_os = "macos")]
-    {
-        resource("python_env/bin/python3")
+    // 2) 开发期就近兜底（与 CI 构建位置一致，或历史布局）
+    for c in dev_resources_candidates(sub) {
+        if c.exists() {
+            return Ok(c);
+        }
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        resource("python_env/bin/python3")
-    }
+    // 3) 系统 Python
+    system_python()
 }
 
 /// ComfyUI 便携版根目录（main.py 所在）
@@ -81,8 +143,26 @@ pub fn comfyui_entry() -> NexusResult<PathBuf> {
 }
 
 /// FastAPI local_server.py 路径（打包期随 resources 一同放置）
+///
+/// 解析顺序（「不静默失败」）：
+///   1) resources/python_env/local_server.py（venv 内自带入口）
+///   2) resources/backend/local_server.py    （CI 把 backend 拷到 resources/backend）
+///   3) 开发期仓库内 backend/local_server.py  （<repo>/backend 或 client/backend）
 pub fn fastapi_entry() -> NexusResult<PathBuf> {
-    resource("python_env/local_server.py").or_else(|_| resource("backend/local_server.py"))
+    if let Ok(p) = resource("python_env/local_server.py") {
+        return Ok(p);
+    }
+    if let Ok(p) = resource("backend/local_server.py") {
+        return Ok(p);
+    }
+    for c in dev_backend_candidates() {
+        if c.exists() {
+            return Ok(c);
+        }
+    }
+    Err(NexusError::PathResolve(
+        "未找到 FastAPI 入口 local_server.py（已尝试 resources/python_env、resources/backend 及开发期仓库路径）".into(),
+    ))
 }
 
 /// ffmpeg 可执行路径

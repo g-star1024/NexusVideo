@@ -199,6 +199,21 @@ jobs:
         shell: bash
         run: cargo install tauri-cli --version "^2.0"
 
+      - name: 安装 Python（构建后端 venv 用）
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 构建后端 Python 环境 (venv + backend)
+        # 调用程流深提供的脚本：scripts/build_backend_bundle.ps1
+        # 它把 venv 建在 <repo>/resources/python_env、backend 拷到 <repo>/resources/backend，
+        # 与 tauri.conf.json 的 bundle.resources（"../../resources/..."，相对 src-tauri）对应，
+        # 打包后落在 <exe_dir>/resources/ 下，满足 paths.rs 的 resource() 期望。
+        # 脚本靠 $PSScriptRoot 自解析路径，不受当前 cwd 影响。
+        shell: pwsh
+        run: |
+          pwsh scripts/build_backend_bundle.ps1
+
       - name: 构建 Tauri (Windows)
         shell: bash
         run: |
@@ -315,6 +330,18 @@ jobs:
 
       - name: 安装 Tauri CLI
         run: cargo install tauri-cli --version "^2.0"
+
+      - name: 构建后端 Python 环境 (venv + backend)
+        # macOS 同样要把 python_env / backend 打进包（tauri.conf.json 的
+        # bundle.resources 已非空）。产物位置与 Windows 一致：<repo>/resources/，
+        # 对应 tauri.conf.json 的 "../../resources/..."（相对 src-tauri）。
+        # 默认 cwd 即 repo 根，直接用 repo 根相对路径。
+        shell: bash
+        run: |
+          python3 -m venv --copies resources/python_env
+          resources/python_env/bin/pip install -r backend/requirements-pack.txt
+          rm -rf resources/backend
+          cp -R backend resources/backend
 
       - name: 设置架构目标
         id: arch_target
