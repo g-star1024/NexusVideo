@@ -112,6 +112,14 @@ jobs:
           restore-keys: |
             cargo-check-
 
+      - name: 创建后端资源占位目录（让 Tauri build script 不报错）
+        # Tauri v2 的 build script 会检查 bundle.resources 配置的路径存在性，
+        # rust-check job 只做编译检查不打包，只需占位即可。
+        run: |
+          mkdir -p resources/python_env
+          mkdir -p resources/backend
+          touch resources/python_env/.gitkeep resources/backend/.gitkeep
+
       - name: cargo check（验证 5 处 P0 修复可编译通过）
         shell: bash
         run: cargo check --manifest-path client/src-tauri/Cargo.toml --offline
