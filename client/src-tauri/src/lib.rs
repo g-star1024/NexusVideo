@@ -14,8 +14,8 @@ pub mod file_manager;
 pub mod init_flow;
 pub mod paths;
 pub mod process_manager;
-pub mod state;
 pub mod startup;
+pub mod state;
 pub mod static_server;
 
 // ---- 自引用声明（edition 2021 的 extern prelude 不含自身 crate 名，
@@ -26,7 +26,8 @@ extern crate self as nexusvideo_client_lib;
 
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::{Manager, SystemTray};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,6 +61,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
         .manage(InitState::new())
+        .system_tray(SystemTray::new())
         .setup(|app| {
             // ==================================================================
             // Task #13: 安装全局 panic hook（崩溃日志系统）
@@ -68,6 +70,47 @@ pub fn run() {
 
             // 启动时打印关键路径（诊断用）
             log::info!("{}", nexusvideo_client_lib::paths::dump_paths());
+
+            // ==================================================================
+            // V2 系统托盘菜单：注册菜单项 + 托盘事件处理。
+            // 点击托盘图标 → 恢复主窗口；菜单「退出 NexusVideo」→ 彻底退出。
+            // ==================================================================
+            {
+                let handle = app.handle().clone();
+
+                let open_item =
+                    MenuItem::with_id(&handle, "show_window", "打开主窗口", true, None::<&str>)
+                        .map_err(|e| e.to_string())?;
+                let quit_item =
+                    MenuItem::with_id(&handle, "quit", "退出 NexusVideo", true, None::<&str>)
+                        .map_err(|e| e.to_string())?;
+
+                let tray_menu = Menu::with_items(
+                    &handle,
+                    &[&open_item, &Menu::new(&handle).unwrap(), &quit_item],
+                )
+                .map_err(|e| e.to_string())?;
+
+                app.tray().set_menu(tray_menu)?;
+
+                app.on_system_tray_event(|app, event| match event {
+                    tauri::SystemTrayEvent::LeftClick { .. } => {
+                        let _ = app.emit("ShowWindow", ());
+                    }
+                    tauri::SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
+                        "show_window" => {
+                            let _ = app.emit("ShowWindow", ());
+                        }
+                        "quit" => {
+                            let _ = app.emit("Quit", ());
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                });
+
+                log::info!("[tray] 系统托盘菜单已注册");
+            }
 
             // 确保 output / logs / config / videos / thumbnails / uploads 目录存在
             let _ = nexusvideo_client_lib::paths::output_dir()
@@ -94,14 +137,58 @@ pub fn run() {
             // 启动静态文件服务（127.0.0.1:9882），供前端 <video> 播放本地文件
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = nexusvideo_client_lib::static_server::start_static_server(app_handle.clone()).await {
+                if let Err(e) =
+                    nexusvideo_client_lib::static_server::start_static_server(app_handle.clone())
+                        .await
+                {
                     log::error!("[static_server] 启动失败: {e}");
                 }
+            });
+
+            // ==================================================================
+            // 系统托盘 (System Tray) + 关闭按钮行为：
+            // 拦截窗口关闭 → 隐藏窗口（最小化到托盘），通过托盘菜单重新打开或退出。
+            // ==================================================================
+            let app_handle_setup = app.handle().clone();
+            app.listen("ShowWindow", move |_app, _event| {
+                let h = app_handle_setup.clone();
+                // 在后台异步恢复窗口（避免在事件回调里阻塞）
+                tauri::async_runtime::spawn(async move {
+                    if let Some(window) = h.get_webview_window("main") {
+                        log::info!("[tray] 打开主窗口");
+                        let _ = window.set_focus();
+                        if let Err(e) = window.show() {
+                            log::error!("[tray] show window 失败: {e}");
+                        }
+                    } else {
+                        log::error!("[tray] 找不到 main 窗口");
+                    }
+                });
+            });
+
+            app.listen("Quit", move |app, _event| {
+                log::info!("[tray] 用户选择退出");
+                // 关闭所有窗口 → 触发 Destroyed 事件 → 触发 on_window_event 清理子进程
+                app.exit(0);
             });
 
             Ok(())
         })
         .on_window_event(|window, event| {
+            // ==================================================================
+            // 系统托盘：拦截窗口关闭 → 隐藏窗口（最小化到托盘），不退出。
+            // 真正退出由托盘菜单「退出 NexusVideo」触发。
+            // ==================================================================
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                log::info!("[window] 用户点击关闭窗口 → 最小化到托盘");
+                // 拦截关闭，不执行默认关闭逻辑
+                api.prevent_close();
+                if let Err(e) = window.hide() {
+                    log::error!("[window] 隐藏窗口失败: {e}");
+                }
+                return;
+            }
+
             // 窗口关闭时优雅停止全部子进程，杜绝孤儿/僵尸进程。
             if let tauri::WindowEvent::Destroyed = event {
                 let handle = window.app_handle().clone();

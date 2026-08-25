@@ -115,8 +115,10 @@ onUnmounted(() => {
 
 <style scoped>
 .init-page {
-  width: 1440px;
-  height: 900px;
+  width: 100vw;
+  height: 100vh;
+  min-width: 1024px;
+  min-height: 640px;
   background: var(--bg-base);
   position: relative;
   overflow: hidden;

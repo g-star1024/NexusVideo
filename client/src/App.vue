@@ -181,8 +181,10 @@ onUnmounted(() => unlisteners.forEach((u) => u()));
 
 <style scoped>
 .app-shell {
-  width: 1440px;
-  height: 900px;
+  width: 100vw;
+  height: 100vh;
+  min-width: 1024px;
+  min-height: 640px;
   background: var(--bg-base);
   display: flex;
   flex-direction: column;
@@ -193,13 +195,16 @@ onUnmounted(() => unlisteners.forEach((u) => u()));
 
 .app-main {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   overflow: hidden;
 }
 
 .app-sidebar {
   width: var(--sidebar-width);
-  height: calc(900px - var(--titlebar-height) - var(--statusbar-height));
+  height: 100%;
+  min-height: 0;
   background: var(--bg-surface);
   border-right: var(--border-subtle);
   flex-shrink: 0;
@@ -207,6 +212,8 @@ onUnmounted(() => unlisteners.forEach((u) => u()));
 
 .app-content {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   position: relative;
   overflow: hidden;
   background: var(--bg-base);
