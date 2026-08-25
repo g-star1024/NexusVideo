@@ -11,7 +11,11 @@
   box-sizing: border-box;
 }
 
-html, body {
+html {
+  height: 100%;
+  width: 100%;
+}
+body {
   font-family: var(--font-sans);
   font-size: var(--text-body);
   font-weight: var(--font-weight-regular);
@@ -21,7 +25,15 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
-  height: 900px;
+  height: 100%;
+  width: 100%;
+}
+
+/* 根容器撑满窗口，Tauri v2 下确保 #app 继承 100% 宽高 */
+#app {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* 暗色滚动条 */
