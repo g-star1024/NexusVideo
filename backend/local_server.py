@@ -63,12 +63,14 @@ try:
     from core.comfyui_ws import ws_listener
     from core.task_manager import task_manager
     from core.inference_router import inference_router
+    from core.skill_registry import skill_registry
 
     # 推理 / 生成相关路由（依赖上述 comfyui core 模块）
     from routers import (  # noqa: F401
         cloud_forward,
         generate,
         progress,
+        skills,
         system,
         task,
         upload,
@@ -134,7 +136,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"用户数据库初始化失败（将使用无鉴权模式）：{e}")
 
-    # --- 启动阶段（仅当 ComfyUI 模块可用且由本服务接管时） ---
+    # --- 技能注册表加载（不依赖 ComfyUI 进程，模块可用即可） ---
+    if comfyui_modules_available:
+        try:
+            n = skill_registry.load_all()
+            logger.info(f"Skill Registry 已加载 {n} 个内置技能")
+        except Exception as e:
+            logger.warning(f"Skill Registry 加载失败（不影响其它功能）：{e}")
+
+    # --- 启动阶段（仅当 ComfyUI 模块可用时） ---
     if comfyui_modules_available and MANAGE_COMFYUI:
         try:
             # 自动启动 ComfyUI（白皮书 4.1：让 ComfyUI 成为"沉默的仆人"）
@@ -160,10 +170,10 @@ async def lifespan(app: FastAPI):
             logger.error(f"WebSocket 监听器启动失败：{e}")
             logger.warning("进度文案化推送将降级为 HTTP 轮询（/progress/status/{task_id}）")
     else:
-        if not MANAGE_COMFYUI:
+        if comfyui_modules_available and not MANAGE_COMFYUI:
             logger.info(
                 "NEXUS_MANAGE_COMFYUI=false：跳过 ComfyUI 拉起"
-                "（由 Tauri/Rust 侧接管 ComfyUI 生命周期）。"
+                "（由 Tauri/Rust 侧接管 ComfyUI 生命周期），技能中心仍可列出/生成。"
             )
         else:
             logger.info("ComfyUI 模块不可用：仅以认证模式运行，跳过推理引擎启动。")
@@ -272,6 +282,7 @@ if comfyui_modules_available:
     app.include_router(system.router)        # /health, /comfyui/*, /inference/*
     app.include_router(progress.router)      # /progress/ws (WebSocket)
     app.include_router(upload.router)        # /upload/image, /upload/video
+    app.include_router(skills.router)        # /skills, /skills/{id}/generate
     app.include_router(cloud_forward.router) # /api/v1/cloud/*
 else:
     logger.warning(
@@ -333,6 +344,11 @@ async def root() -> dict:
             "cloud_task_status": "GET /api/v1/cloud/task/{task_id}",
             "cloud_progress_ws": "WS /api/v1/cloud/progress/ws?task_id={task_id}",
             "cloud_health": "GET /api/v1/cloud/health",
+            # V2 阶段 — 技能中心（Skill Registry）
+            "skills_list": "GET /skills",
+            "skill_detail": "GET /skills/{skill_id}",
+            "skill_readiness": "GET /skills/{skill_id}/readiness",
+            "skill_generate": "POST /skills/{skill_id}/generate",
         },
     }
 

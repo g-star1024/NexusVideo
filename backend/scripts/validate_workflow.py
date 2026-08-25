@@ -135,7 +135,96 @@ def validate_workflow(path: Path) -> dict:
     return result
 
 
+def _print_result(result: dict, label: str) -> bool:
+    """打印单个工作流校验结果，返回是否通过。"""
+    print(f"\n{'=' * 60}")
+    print(f"验证: {label}")
+    print(f"{'=' * 60}")
+    print(f"  路径: {result['path']}")
+    print(f"  节点数: {result.get('node_count', '?')}")
+    print(f"  字符串占位符: {result.get('placeholder_count', 0)}")
+    print(f"  类型占位符: {result.get('type_placeholder_count', 0)}")
+    print(f"  状态: {'✅ 通过' if result['valid'] else '❌ 失败'}")
+
+    if result["errors"]:
+        for e in result["errors"]:
+            print(f"    ❌ {e}")
+    if result["warnings"]:
+        for w in result["warnings"]:
+            print(f"    ⚠️  {w}")
+    return result["valid"]
+
+
+def validate_skill(skill_id: str) -> int:
+    """
+    校验指定技能（backend/skills/<id>/）的 manifest + workflow.json。
+
+    用法：
+        python backend/scripts/validate_workflow.py --skill ref-t2v
+    """
+    root = Path(__file__).resolve().parents[2]
+    skills_dir = root / "backend" / "skills"
+    if not skills_dir.is_dir():
+        print(f"[FAIL] 未找到 backend/skills/ 目录（{skills_dir}）")
+        return 1
+
+    skill_dir = skills_dir / skill_id
+    if not skill_dir.is_dir():
+        print(f"[FAIL] 技能不存在：{skill_dir}")
+        return 1
+
+    # 1. manifest.json
+    manifest_path = skill_dir / "manifest.json"
+    if not manifest_path.is_file():
+        print(f"[FAIL] 技能缺少 manifest.json：{manifest_path}")
+        return 1
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as e:
+        print(f"[FAIL] manifest.json 解析失败: {e}")
+        return 1
+    print(f"\n{'=' * 60}")
+    print(f"技能 manifest: {skill_id}")
+    print(f"{'=' * 60}")
+    print(
+        f"  id={manifest.get('id')}  name={manifest.get('name')}  "
+        f"mode={manifest.get('mode')}  risk_tier={manifest.get('risk_tier')}"
+    )
+    entry = manifest.get("entry", "workflow.json")
+
+    # 2. workflow.json
+    wf_path = skill_dir / entry
+    if not wf_path.is_file():
+        print(f"[FAIL] 工作流文件不存在：{wf_path}")
+        return 1
+    result = validate_workflow(wf_path)
+    all_valid = _print_result(result, f"{skill_id}/{entry}")
+
+    if all_valid:
+        print(f"\n{'=' * 60}")
+        print(f"总结: ✅ 技能 [{skill_id}] 验证通过")
+        print(f"{'=' * 60}")
+    else:
+        print(f"\n{'=' * 60}")
+        print(f"总结: ❌ 技能 [{skill_id}] 存在验证失败项")
+        print(f"{'=' * 60}")
+    return 0 if all_valid else 1
+
+
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="工作流/技能校验工具")
+    parser.add_argument(
+        "--skill", metavar="SKILL_ID",
+        help="校验指定技能（backend/skills/<SKILL_ID>/），含 manifest + workflow.json",
+    )
+    args = parser.parse_args()
+
+    if args.skill:
+        return validate_skill(args.skill)
+
     root = Path(__file__).resolve().parents[2]
 
     # 优先检查项目根目录的 workflows/，再检查 backend/workflows/
@@ -163,24 +252,8 @@ def main() -> int:
             print(f"[SKIP] {name} 不存在")
             continue
 
-        print(f"\n{'=' * 60}")
-        print(f"验证: {name}")
-        print(f"{'=' * 60}")
-
         result = validate_workflow(path)
-        print(f"  路径: {result['path']}")
-        print(f"  节点数: {result.get('node_count', '?')}")
-        print(f"  字符串占位符: {result.get('placeholder_count', 0)}")
-        print(f"  类型占位符: {result.get('type_placeholder_count', 0)}")
-        print(f"  状态: {'✅ 通过' if result['valid'] else '❌ 失败'}")
-
-        if result["errors"]:
-            all_valid = False
-            for e in result["errors"]:
-                print(f"    ❌ {e}")
-        if result["warnings"]:
-            for w in result["warnings"]:
-                print(f"    ⚠️  {w}")
+        all_valid = _print_result(result, name) and all_valid
 
     if all_valid:
         print(f"\n{'=' * 60}")

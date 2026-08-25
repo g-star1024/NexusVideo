@@ -27,6 +27,10 @@ class ErrorCode:
     COMFYUI_OOM = "11004"             # 爆显存
     COMFYUI_NODE_ERROR = "11005"      # 节点连接/执行错误
 
+    # --- 技能（11xxx，接在 ComfyUI 段之后）---
+    SKILL_NOT_FOUND = "11006"              # 技能不存在
+    SKILL_DEPENDENCY_MISSING = "11007"    # 技能依赖（模型/自定义节点）缺失
+
     # --- 任务（12xxx） ---
     TASK_NOT_FOUND = "12001"
     TASK_TIMEOUT = "12002"
@@ -194,4 +198,46 @@ class InvalidInputError(NexusError):
             message=reason,
             error_code=ErrorCode.INVALID_INPUT,
             status_code=400,
+        )
+
+
+# ================================================================
+# 技能相关异常（Skill Registry）
+# ================================================================
+class SkillNotFoundError(NexusError):
+    """请求的技能不存在（id 未在 Skill Registry 注册）。"""
+
+    def __init__(self, skill_id: str):
+        super().__init__(
+            message=f"技能不存在：{skill_id}",
+            error_code=ErrorCode.SKILL_NOT_FOUND,
+            status_code=404,
+            detail={"skill_id": skill_id},
+        )
+
+
+class SkillDependencyMissingError(NexusError):
+    """技能依赖（模型 / 自定义节点）未就绪，无法生成。"""
+
+    def __init__(
+        self,
+        skill_id: str,
+        missing_models: list[str] | None = None,
+        missing_nodes: list[str] | None = None,
+    ):
+        detail = {
+            "skill_id": skill_id,
+            "missing_models": missing_models or [],
+            "missing_nodes": missing_nodes or [],
+        }
+        msg = f"技能 [{skill_id}] 依赖未就绪"
+        if missing_models:
+            msg += f"，缺少模型：{', '.join(missing_models)}"
+        if missing_nodes:
+            msg += f"，缺少自定义节点：{', '.join(missing_nodes)}"
+        super().__init__(
+            message=msg,
+            error_code=ErrorCode.SKILL_DEPENDENCY_MISSING,
+            status_code=503,
+            detail=detail,
         )

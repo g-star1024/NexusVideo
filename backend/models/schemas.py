@@ -22,6 +22,17 @@ class GenerationMode(str, Enum):
     VIDEO2VIDEO = "video2video"  # 模式三：视频风格化
 
 
+class SkillMode(str, Enum):
+    """技能生成模式标签（供前端 Gallery 展示与 TaskRecord 回填）。
+
+    与 GenerationMode 的区别：更轻量（t2v/i2v/v2v），
+    用于技能清单，不直接耦合三大模式枚举值。
+    """
+    T2V = "t2v"      # 文生视频
+    I2V = "i2v"      # 图生视频
+    V2V = "v2v"      # 视频风格化
+
+
 class TaskStatus(str, Enum):
     """任务状态机。"""
     QUEUED = "queued"            # 已入队等待
@@ -244,3 +255,96 @@ class ComfyUIProcessStatus(BaseModel):
     uptime_seconds: float | None = Field(default=None, description="已运行时长（秒）")
     cpu_percent: float | None = Field(default=None, description="CPU 占用率")
     memory_mb: float | None = Field(default=None, description="内存占用（MB）")
+
+
+# ================================================================
+# 技能中心（Skill Registry）相关模型
+# ================================================================
+class SkillModelDep(BaseModel):
+    """技能依赖的模型文件声明。"""
+    name: str = Field(..., description="模型文件名，如 wan2.1-t2v-1.3b_fp16.safetensors")
+    type: str = Field(
+        default="model",
+        description="模型类型：unet | clip | vae | lora | checkpoint",
+    )
+    min_vram_mb: int | None = Field(default=None, description="最低显存需求（MB）")
+    source: str | None = Field(default=None, description="建议下载来源 URL")
+
+
+class SkillMeta(BaseModel):
+    """/skills 列表接口返回的技能摘要（供前端 Gallery 卡片展示）。"""
+    id: str = Field(..., description="技能唯一 slug，用于 URL 与目录名")
+    name: str = Field(..., description="展示名")
+    category: str = Field(..., description="分类：comic | image | video | audio | utility")
+    description: str = Field(..., description="一句话描述")
+    mode: SkillMode = Field(..., description="生成模式标签 t2v|i2v|v2v")
+    risk_tier: str = Field(default="safe", description="风险档位：safe | moderate | high")
+    cloud: bool = Field(default=False, description="是否仅支持云端推理（本地无法运行）")
+    thumbnail: str | None = Field(default=None, description="缩略图相对路径（走静态路由）")
+    required_models: list[str] = Field(
+        default_factory=list, description="依赖模型文件名列表（仅名称，供展示）"
+    )
+    default_params: dict = Field(
+        default_factory=dict, description="默认参数（前端不传时使用）"
+    )
+
+
+class SkillManifest(SkillMeta):
+    """技能完整 manifest（GET /skills/{id} 返回）。
+
+    注意：重写 required_models 为 list[SkillModelDep]，以承载 manifest.json
+    中的完整模型依赖声明；父类 SkillMeta 的 list[str] 由 _to_meta()
+    在构造列表响应时从 dict 提取 name 后填入。
+    """
+    required_models: list[SkillModelDep] = Field(
+        default_factory=list, description="依赖模型完整声明（name/type/min_vram_mb/source）"
+    )
+    version: str = Field(default="1.0.0", description="技能版本")
+    entry: str = Field(default="workflow.json", description="工作流 JSON 相对路径")
+    required_custom_nodes: list[str] = Field(
+        default_factory=list, description="依赖的 ComfyUI 自定义节点（仓库名/标识）"
+    )
+    param_schema: dict = Field(
+        default_factory=dict, description="可调参数 → 节点字段 映射（可选）"
+    )
+    output: dict = Field(
+        default_factory=dict, description="输出节点/格式声明（可选）"
+    )
+    enabled: bool = Field(default=True, description="是否启用")
+
+
+class SkillGenerateRequest(BaseModel):
+    """POST /skills/{id}/generate 请求体。"""
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="用户输入的文本描述",
+        examples=["赛博朋克风格的猫在雨中走，电影级光影"],
+    )
+    params: dict = Field(
+        default_factory=dict,
+        description="覆盖默认参数的键值对（如 steps/cfg/width/height/seed）",
+    )
+    seed: int | None = Field(
+        default=None,
+        ge=0,
+        le=2**32 - 1,
+        description="随机种子。None 时后端自动随机生成",
+    )
+
+
+class SkillGenerateResponse(BaseModel):
+    """POST /skills/{id}/generate 响应体（202 Accepted）。"""
+    task_id: str = Field(..., description="ComfyUI 返回的 prompt_id")
+    seed: int = Field(..., description="实际使用的随机种子")
+    status: str = Field(default="queued", description="初始状态")
+    skill_id: str = Field(..., description="技能 id")
+
+
+class SkillReadinessResponse(BaseModel):
+    """GET /skills/{id}/readiness 响应体。"""
+    ready: bool = Field(..., description="依赖是否就绪")
+    missing_models: list[str] = Field(default_factory=list, description="缺失模型文件名")
+    missing_nodes: list[str] = Field(default_factory=list, description="缺失自定义节点")
+    note: str | None = Field(default=None, description="补充说明")

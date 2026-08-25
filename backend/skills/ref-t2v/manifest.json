@@ -1,0 +1,59 @@
+{
+  "id": "ref-t2v",
+  "name": "文字生成视频",
+  "category": "video",
+  "description": "输入一句话，生成一段 Wan2.1 文生视频。复用现有 txt2video 工作流（10 节点精简版），作为 Skill Registry 的首个参考技能。",
+  "version": "1.0.0",
+  "mode": "t2v",
+  "risk_tier": "safe",
+  "entry": "workflow.json",
+  "cloud": false,
+  "thumbnail": null,
+  "required_models": [
+    {
+      "name": "wan2.1-t2v-1.3b_fp16.safetensors",
+      "type": "unet",
+      "min_vram_mb": 3000,
+      "source": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_Repackaged"
+    },
+    {
+      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "clip",
+      "min_vram_mb": 2000,
+      "source": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_Repackaged"
+    },
+    {
+      "name": "wan_2.1_vae.safetensors",
+      "type": "vae",
+      "min_vram_mb": 500,
+      "source": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_Repackaged"
+    }
+  ],
+  "required_custom_nodes": [
+    "ComfyUI-WanVideoWrapper"
+  ],
+  "default_params": {
+    "width": 832,
+    "height": 480,
+    "frames": 81,
+    "steps": 30,
+    "cfg": 6.0,
+    "negative_prompt": "text, watermark, low quality, blurry, deformed, distorted, bad anatomy, extra limbs, lowres, worst quality, jpeg artifacts, duplicate"
+  },
+  "param_schema": {
+    "prompt": { "type": "string", "required": true },
+    "seed": { "type": "int" },
+    "steps": { "type": "int" },
+    "cfg": { "type": "float" },
+    "width": { "type": "int" },
+    "height": { "type": "int" },
+    "frames": { "type": "int" },
+    "negative_prompt": { "type": "string" }
+  },
+  "output": {
+    "type": "video",
+    "node": "10",
+    "format": "video/mp4"
+  },
+  "enabled": true
+}

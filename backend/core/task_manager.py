@@ -27,7 +27,8 @@ from loguru import logger
 from config import settings
 from core.comfyui_client import comfyui_client
 from core.workflow_translator import translator
-from models.schemas import GenerateRequest, TaskStatus, GenerationMode
+from core.skill_registry import skill_registry, SKILL_MODE_TO_GEN
+from models.schemas import GenerateRequest, TaskStatus, GenerationMode, SkillMode
 from exceptions import (
     ComfyUINotRunningError,
     ComfyUITimeoutError,
@@ -77,6 +78,7 @@ class TaskRecord:
     output_filename: str | None = None
     error: str | None = None
     error_code: str | None = None
+    skill_id: str | None = None     # 若由 Skill Registry 派发，记录技能 id
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     retry_count: int = 0
@@ -171,13 +173,95 @@ class TaskManager:
             raise
 
     # ================================================================
+    # 提交技能预构建工作流（Skill Registry 专用）
+    # ================================================================
+    async def submit_prepared_workflow(
+        self,
+        workflow: dict[str, Any],
+        skill_id: str,
+        params: dict[str, Any],
+        seed: int | None = None,
+    ) -> tuple[str, int]:
+        """
+        提交已由 SkillRegistry.build_workflow 产好的工作流。
+
+        与 submit_and_track 完全复用的部分：
+          - 队列容量检查（TaskQueueFullError）
+          - submit_prompt → 获取 prompt_id
+          - ConnectError/ConnectTimeout → ComfyUINotRunningError（上一轮修复的错误路径）
+          - 创建 TaskRecord → 启动 _track_task（OOM 自动降级重试链路一致）
+
+        不同点：
+          - 跳过 translator.translate()，因为 workflow 已由 SkillRegistry 构建
+          - request=None（技能无需 GenerateRequest，降级重试时亦不依赖 request）
+
+        返回：(task_id, resolved_seed)
+        """
+        # Step 1: 队列容量检查（复用既有逻辑）
+        async with self._lock:
+            if self._active_count >= settings.max_concurrent_tasks:
+                raise TaskQueueFullError(settings.max_concurrent_tasks)
+            self._active_count += 1
+
+        try:
+            # 种子：优先用调用方传入的（build_workflow 已解析），否则兜底随机
+            resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+
+            # Step 2: 提交到 ComfyUI（复用既有连接错误捕获 → 明确业务错误码）
+            client_id = str(uuid.uuid4())
+            try:
+                result = await comfyui_client.submit_prompt(workflow, client_id)
+            except httpx.ConnectError:
+                raise ComfyUINotRunningError(detail={
+                    "comfyui_url": settings.comfyui_base_url,
+                    "hint": "本地 ComfyUI 服务未启动，请检查模型是否下载完成",
+                })
+            except httpx.ConnectTimeout:
+                raise ComfyUINotRunningError(detail={
+                    "comfyui_url": settings.comfyui_base_url,
+                    "hint": "本地 ComfyUI 服务未响应，连接超时",
+                })
+            task_id = result["prompt_id"]
+
+            # Step 3: 创建任务记录（mode 依据技能 manifest.mode 映射回 GenerationMode）
+            manifest = skill_registry.get_skill(skill_id)
+            gen_mode_value = (
+                SKILL_MODE_TO_GEN.get(manifest.mode, GenerationMode.TXT2VIDEO)
+                if manifest is not None
+                else GenerationMode.TXT2VIDEO
+            )
+            record = TaskRecord(
+                task_id=task_id,
+                prompt=params.get("prompt", "") or "",
+                mode=GenerationMode(gen_mode_value),
+                seed=resolved_seed,
+                status=TaskStatus.QUEUED,
+                skill_id=skill_id,
+            )
+            self._tasks[task_id] = record
+            logger.info(
+                f"技能任务已提交：skill={skill_id}, task_id={task_id}, seed={resolved_seed}"
+            )
+
+            # Step 4: 启动后台跟踪协程（request=None，降级重试路径兼容）
+            asyncio.create_task(self._track_task(task_id, workflow, request=None))
+
+            return task_id, resolved_seed
+
+        except Exception:
+            # 提交失败，释放队列槽位
+            async with self._lock:
+                self._active_count -= 1
+            raise
+
+    # ================================================================
     # 后台任务跟踪
     # ================================================================
     async def _track_task(
         self,
         task_id: str,
         workflow: dict[str, Any],
-        request: GenerateRequest,
+        request: GenerateRequest | None = None,
     ) -> None:
         """
         后台轮询 ComfyUI /history/{prompt_id}，更新任务状态。
@@ -342,7 +426,7 @@ class TaskManager:
         self,
         task_id: str,
         workflow: dict,
-        request: GenerateRequest,
+        request: GenerateRequest | None = None,
     ) -> None:
         """OOM 后执行降级策略并重新提交任务。"""
         record = self._tasks[task_id]

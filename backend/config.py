@@ -91,6 +91,10 @@ class Settings(BaseSettings):
         default=Path(__file__).parent.parent / "workflows",
         description="ComfyUI 工作流模板目录（项目根目录下 workflows/）"
     )
+    skills_dir: Path = Field(
+        default=Path(__file__).parent / "skills",
+        description="内置技能目录（backend/skills/），每技能一个子目录：<id>/manifest.json + workflow.json"
+    )
     output_dir: Path = Field(
         default=Path("./output"),
         description="生成视频输出目录"
