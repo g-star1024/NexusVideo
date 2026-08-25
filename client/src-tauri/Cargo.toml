@@ -6,7 +6,7 @@
 # ============================================================================
 [package]
 name = "nexusvideo-client"
-version = "0.1.12"
+version = "0.1.13"
 description = "NexusVideo AI 视频生成桌面客户端"
 authors = ["NexusVideo Team"]
 edition = "2021"

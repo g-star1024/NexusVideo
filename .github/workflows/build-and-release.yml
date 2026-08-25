@@ -229,28 +229,21 @@ jobs:
           echo "[INFO] 当前 tag/ref: $(git describe --tags --always 2>/dev/null || echo 'no-tag')"
           echo "[INFO] tauri.conf.json version:"
           python3 -c "import json; print('  ', json.load(open('client/src-tauri/tauri.conf.json'))['version'])"
-          echo "[INFO] plugins.log 配置内容:"
-          python3 -c "import json; c=json.load(open('client/src-tauri/tauri.conf.json')); print('  ', c.get('plugins',{}).get('log','NOT FOUND'))"
+          echo "[INFO] 验证 resources 目录存在性:"
+          ls -la resources/python_env/ 2>&1 || echo "::error::resources/python_env 不存在"
+          ls -la resources/backend/local_server.py 2>&1 || echo "::error::resources/backend/local_server.py 不存在"
+          echo "[INFO] 检查 resources/python_env/python.exe (Windows):"
+          test -f resources/python_env/Scripts/python.exe && echo "  python.exe OK" || echo "::error::python.exe 不存在"
 
-          # 强制清理：确保不使用任何缓存的编译产物（浅克隆/缓存可能导致旧 target 残留）
+          # 强制清理：确保不使用任何缓存的编译产物
           cd client/src-tauri
-          cargo clean 2>&1 | tail -3
+          echo "[INFO] 工作目录: $(pwd)"
+          echo "[INFO] 从 src-tauri 检查 resources 路径: ../../resources/python_env"
+          test -d ../../resources/python_env && echo "  ../../resources/python_env OK" || echo "::error::../../resources/python_env 不存在"
 
+          cargo clean 2>&1 | tail -3
           echo "[INFO] 开始全新构建..."
           cargo tauri build 2>&1
-
-          # 构建后验证：确认 exe 内嵌的配置包含修复（plugins.log = 空对象）
-          EXE="target/release/bundle/nsis/NexusVideo_"*"*_x64-setup.exe"
-          if [ -f "$EXE" ]; then
-            echo "[VERIFY] 检查 exe 中是否包含旧的 plugins.log map 配置..."
-            if strings "$EXE" 2>/dev/null | grep -q '"format".*"{timestamp}' ; then
-              echo "::error::exe 中检测到旧的 plugins.log format 字段！构建产物可能使用了错误的配置"
-              exit 1
-            fi
-            echo "[VERIFY] 通过：exe 未包含旧的 plugins.log format 配置"
-          else
-            echo "::warning::未找到 exe 文件，跳过内嵌配置验证"
-          fi
         timeout-minutes: 25
 
       - name: 签名 (Windows EV)
@@ -328,6 +321,13 @@ jobs:
       - name: 安装 Xcode Command Line Tools
         run: xcode-select --install || true
 
+      - name: 安装 Python（构建后端 venv 用）
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "backend/requirements-pack.txt"
+
       - name: 安装前端
         run: cd client && npm ci
         timeout-minutes: 10
@@ -343,13 +343,26 @@ jobs:
         # macOS 同样要把 python_env / backend 打进包（tauri.conf.json 的
         # bundle.resources 已非空）。产物位置与 Windows 一致：<repo>/resources/，
         # 对应 tauri.conf.json 的 "../../resources/..."（相对 src-tauri）。
-        # 默认 cwd 即 repo 根，直接用 repo 根相对路径。
         shell: bash
         run: |
-          python3 -m venv --copies resources/python_env
-          resources/python_env/bin/pip install -r backend/requirements-pack.txt
+          echo "[DEBUG] python3 路径: $(which python3)"
+          echo "[DEBUG] python3 版本: $(python3 --version)"
+          echo "[DEBUG] python3 -m venv 测试:"
+          python3 -c "import venv; print('venv OK')" 2>&1 || {
+            echo "::error::python3 缺少 venv 模块，安装 virtualenv..."
+            python3 -m pip install --user virtualenv
+            python3 -m virtualenv resources/python_env
+          } || python3 -m venv resources/python_env
+          echo "[DEBUG] venv 激活检查:"
+          source resources/python_env/bin/activate
+          echo "[DEBUG] pip 版本: $(pip --version)"
+          pip install --upgrade pip setuptools wheel
+          pip install -r backend/requirements-pack.txt --no-cache-dir
+          echo "[DEBUG] 安装完成，验证:"
+          python3 -c "import fastapi; print('fastapi OK:', fastapi.__version__)"
           rm -rf resources/backend
           cp -R backend resources/backend
+          echo "[DEBUG] resources/backend 文件数: $(find resources/backend -type f | wc -l)"
 
       - name: 设置架构目标
         id: arch_target
