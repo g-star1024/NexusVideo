@@ -340,29 +340,97 @@ jobs:
         run: cargo install tauri-cli --version "^2.0"
 
       - name: 构建后端 Python 环境 (venv + backend)
-        # macOS 同样要把 python_env / backend 打进包（tauri.conf.json 的
-        # bundle.resources 已非空）。产物位置与 Windows 一致：<repo>/resources/，
-        # 对应 tauri.conf.json 的 "../../resources/..."（相对 src-tauri）。
+        # macOS 同样要把 python_env / backend 打进包。产物位置：<repo>/resources/。
         shell: bash
         run: |
-          echo "[DEBUG] python3 路径: $(which python3)"
-          echo "[DEBUG] python3 版本: $(python3 --version)"
-          echo "[DEBUG] python3 -m venv 测试:"
-          python3 -c "import venv; print('venv OK')" 2>&1 || {
-            echo "::error::python3 缺少 venv 模块，安装 virtualenv..."
-            python3 -m pip install --user virtualenv
-            python3 -m virtualenv resources/python_env
-          } || python3 -m venv resources/python_env
-          echo "[DEBUG] venv 激活检查:"
+          echo "==========================================="
+          echo " macOS 后端打包环境构建"
+          echo "==========================================="
+          echo "[0/5] 诊断信息"
+          echo "  pwd: $(pwd)"
+          echo "  python3 路径: $(which python3)"
+          echo "  python3 版本: $(python3 --version 2>&1)"
+          echo "  venv 模块测试: $(python3 -c 'import venv; print(\"venv OK\")' 2>&1)"
+          echo "  requirements-pack.txt 存在: $(test -f backend/requirements-pack.txt && echo YES || echo NO)"
+          echo "  requirements 内容:"
+          cat backend/requirements-pack.txt
+
+          echo ""
+          echo "[1/5] 创建 venv"
+          rm -rf resources/python_env
+          if python3 -c 'import venv' 2>/dev/null; then
+            echo "  [尝试] python3 -m venv"
+            python3 -m venv resources/python_env 2>&1
+            if [ $? -ne 0 ]; then
+              echo "  [WARN] venv 失败，尝试 virtualenv..."
+              python3 -m pip install --user virtualenv 2>&1
+              python3 -m virtualenv resources/python_env 2>&1
+            fi
+          else
+            echo "  [WARN] 无 venv 模块，安装 virtualenv"
+            python3 -m pip install --user virtualenv 2>&1
+            python3 -m virtualenv resources/python_env 2>&1
+          fi
+          if [ ! -f resources/python_env/bin/python3 ]; then
+            echo "::error::venv 创建失败，找不到 bin/python3"
+            ls -la resources/python_env/ 2>&1 || true
+            exit 1
+          fi
+          echo "  [OK] venv 创建成功"
+
+          echo ""
+          echo "[2/5] 升级 pip + 安装依赖（带重试）"
           source resources/python_env/bin/activate
-          echo "[DEBUG] pip 版本: $(pip --version)"
-          pip install --upgrade pip setuptools wheel
-          pip install -r backend/requirements-pack.txt --no-cache-dir
-          echo "[DEBUG] 安装完成，验证:"
-          python3 -c "import fastapi; print('fastapi OK:', fastapi.__version__)"
+          echo "  [debug] 激活后 python: $(which python)"
+          echo "  [debug] 激活后 pip: $(which pip)"
+          pip install --upgrade pip setuptools wheel 2>&1 | tail -3
+          echo "  [debug] pip 版本: $(pip --version)"
+
+          max_retries=2
+          for i in $(seq 1 $max_retries); do
+            echo "  [attempt $i/$max_retries] pip install -r backend/requirements-pack.txt --timeout 120"
+            pip install -r backend/requirements-pack.txt --timeout 120 2>&1 | tail -10
+            if [ $? -eq 0 ]; then
+              echo "  [OK] 安装成功"
+              break
+            fi
+            echo "  [WARN] 安装失败，重试..."
+          done
+          if ! pip list 2>/dev/null | grep -q fastapi; then
+            echo "::error::pip install 失败（已重试 $max_retries 次），fastapi 未安装"
+            pip install fastapi --timeout 120 2>&1 | tail -5
+            exit 1
+          fi
+
+          echo ""
+          echo "[3/5] 验证关键依赖可导入"
+          for mod in fastapi uvicorn pydantic bcrypt httpx; do
+            if python3 -c "import $mod" 2>&1; then
+              echo "  [OK] $mod"
+            else
+              echo "::error::$mod 导入失败"
+              exit 1
+            fi
+          done
+          echo "  [OK] fastapi 版本: $(python3 -c 'import fastapi; print(fastapi.__version__)')"
+
+          echo ""
+          echo "[4/5] 拷贝后端源码"
           rm -rf resources/backend
           cp -R backend resources/backend
-          echo "[DEBUG] resources/backend 文件数: $(find resources/backend -type f | wc -l)"
+          if [ ! -f resources/backend/local_server.py ]; then
+            echo "::error::拷贝后缺少 local_server.py"
+            exit 1
+          fi
+          echo "  [OK] 拷贝完成，文件数: $(find resources/backend -type f | wc -l)"
+
+          echo ""
+          echo "[5/5] 最终验证"
+          echo "  resources/python_env/bin/python3: $(test -f resources/python_env/bin/python3 && echo OK || echo MISSING)"
+          echo "  resources/backend/local_server.py: $(test -f resources/backend/local_server.py && echo OK || echo MISSING)"
+          echo "==========================================="
+          echo " macOS 后端打包环境构建完成"
+          echo "==========================================="
 
       - name: 设置架构目标
         id: arch_target
