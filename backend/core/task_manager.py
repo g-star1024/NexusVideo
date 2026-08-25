@@ -134,7 +134,18 @@ class TaskManager:
             # Step 3: 提交到 ComfyUI
             # 生成 client_id 用于 WebSocket 关联（P1 阶段启用）
             client_id = str(uuid.uuid4())
-            result = await comfyui_client.submit_prompt(workflow, client_id)
+            try:
+                result = await comfyui_client.submit_prompt(workflow, client_id)
+            except httpx.ConnectError:
+                raise ComfyUINotRunningError(detail={
+                    "comfyui_url": settings.comfyui_base_url,
+                    "hint": "本地 ComfyUI 服务未启动，请检查模型是否下载完成",
+                })
+            except httpx.ConnectTimeout:
+                raise ComfyUINotRunningError(detail={
+                    "comfyui_url": settings.comfyui_base_url,
+                    "hint": "本地 ComfyUI 服务未响应，连接超时",
+                })
             task_id = result["prompt_id"]
 
             # Step 4: 创建任务记录

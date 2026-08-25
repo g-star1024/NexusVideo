@@ -7,7 +7,8 @@ NexusVideo Backend - 系统路由
 负责健康检测、ComfyUI 进程管理、推理模式切换等。
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, status
+from fastapi.responses import JSONResponse
 
 from loguru import logger
 
@@ -22,6 +23,7 @@ from models.schemas import (
     ErrorResponse,
 )
 from models.schemas import InferenceMode
+import httpx
 
 router = APIRouter(tags=["系统"])
 
@@ -173,3 +175,69 @@ async def suggest_cloud() -> dict:
             if should else "本地 GPU 性能充足"
         ),
     }
+
+
+@router.get(
+    "/comfyui/health",
+    status_code=status.HTTP_200_OK,
+    summary="ComfyUI 健康检查（轻量版）",
+    description=(
+        "快速检测 ComfyUI 是否在线。用于前端在发起生成请求前的预检。"
+        "\n\n"
+        "成功响应（200）：\n"
+        "  {\"success\": true, \"available\": true, \"devices\": [...]}\n"
+        "\n"
+        "失败响应（503）：\n"
+        "  {\"success\": false, \"error_code\": \"COMFYUI_UNAVAILABLE\", ...}"
+    ),
+)
+async def comfyui_health_check():
+    """
+    ComfyUI 健康检查（轻量版）。
+
+    与 /health 的区别：
+      - /health：综合健康检测（FastAPI + ComfyUI + GPU），返回 HealthResponse
+      - /comfyui/health：纯 ComfyUI 连通性检测，用于生成前预检
+
+    当 ComfyUI 不可用时，返回 HTTP 503 + 明确业务错误码，
+    前端据此禁用生成按钮并提示用户。
+    """
+    try:
+        stats = await comfyui_client.health_check()
+        return {
+            "success": True,
+            "available": True,
+            "comfyui_url": settings.comfyui_base_url,
+            "devices": stats.get("devices", []),
+            "system": stats.get("system", {}),
+        }
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        logger.warning(f"ComfyUI 健康检查失败（连接错误）：{e}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "success": False,
+                "error_code": "COMFYUI_UNAVAILABLE",
+                "message": (
+                    "本地 ComfyUI 服务未启动，请检查模型是否下载完成。"
+                    "可通过 /comfyui/start 手动启动。"
+                ),
+                "detail": {
+                    "comfyui_url": settings.comfyui_base_url,
+                    "hint": "请确认本地模型已下载完毕，然后启动 ComfyUI 推理引擎",
+                },
+            },
+        )
+    except Exception as e:
+        logger.warning(f"ComfyUI 健康检查失败（未知异常）：{e}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "success": False,
+                "error_code": "COMFYUI_UNAVAILABLE",
+                "message": "本地 ComfyUI 服务异常，请稍后重试",
+                "detail": {
+                    "comfyui_url": settings.comfyui_base_url,
+                },
+            },
+        )
