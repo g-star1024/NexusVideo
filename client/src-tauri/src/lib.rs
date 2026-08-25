@@ -26,10 +26,9 @@ extern crate self as nexusvideo_client_lib;
 
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
-use tauri::Listener;
+use tauri::{Emitter, Listener, Manager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton};
-use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -180,7 +179,8 @@ pub fn run() {
             app.listen("Quit", move |app, _event| {
                 log::info!("[tray] 用户选择退出");
                 // 关闭所有窗口 → 触发 Destroyed 事件 → 触发 on_window_event 清理子进程
-                app.exit(0);
+                // App::handle() → AppHandle，AppHandle 才有 exit(i32) 方法
+                app.handle().exit(0);
             });
 
             Ok(())
