@@ -91,7 +91,7 @@ pub fn run() {
                 )
                 .map_err(|e| e.to_string())?;
 
-                app.tray().set_menu(tray_menu)?;
+                app.tray().set_menu(tray_menu).map_err(|e| e.to_string())?;
 
                 app.on_system_tray_event(|app, event| match event {
                     tauri::SystemTrayEvent::LeftClick { .. } => {

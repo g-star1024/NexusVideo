@@ -243,7 +243,21 @@ jobs:
 
           cargo clean 2>&1 | tail -3
           echo "[INFO] 开始全新构建..."
-          cargo tauri build 2>&1
+          set -o pipefail
+          BUILD_LOG=tauri-build.log
+          cargo tauri build >"$BUILD_LOG" 2>&1
+          RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "=== Tauri build FAILED (exit $RC) — emitting error annotations ==="
+            grep -iE "error\[|error:|failed" "$BUILD_LOG" | tail -20 | while IFS= read -r line; do
+              echo "::error::TAURI_ERR: $line"
+            done
+            tail -25 "$BUILD_LOG" | while IFS= read -r line; do
+              echo "::error::TAURI_TAIL: $line"
+            done
+            exit "$RC"
+          fi
+          echo "[OK] Tauri build 成功"
         timeout-minutes: 25
 
       - name: 签名 (Windows EV)
@@ -454,7 +468,21 @@ jobs:
           cd client/src-tauri
           cargo clean 2>&1 | tail -2
           rustup target add ${{ steps.arch_target.outputs.cargo_target }}
-          cargo tauri build --target ${{ steps.arch_target.outputs.cargo_target }}
+          set -o pipefail
+          BUILD_LOG=tauri-build.log
+          cargo tauri build --target ${{ steps.arch_target.outputs.cargo_target }} >"$BUILD_LOG" 2>&1
+          RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "=== Tauri build FAILED (exit $RC) — emitting error annotations ==="
+            grep -iE "error\[|error:|failed" "$BUILD_LOG" | tail -20 | while IFS= read -r line; do
+              echo "::error::TAURI_ERR: $line"
+            done
+            tail -25 "$BUILD_LOG" | while IFS= read -r line; do
+              echo "::error::TAURI_TAIL: $line"
+            done
+            exit "$RC"
+          fi
+          echo "[OK] Tauri build 成功"
         timeout-minutes: 30
 
       - name: 签名 + 公证 (macOS Developer ID)
