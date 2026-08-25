@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
 
   "productName": "NexusVideo",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "identifier": "com.nexusvideo.client",
   "build": {
     "frontendDist": "../dist",
@@ -29,10 +29,6 @@
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' data: blob: https://*; media-src 'self' blob: file: https://*; connect-src 'self' http://127.0.0.1:8188 http://127.0.0.1:9881 http://127.0.0.1:9882 ws://127.0.0.1:8188 ws://127.0.0.1:9881 http://localhost:9881 ws://localhost:9881 https://*; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-    },
-    "systemTray": {
-      "iconPath": "icons/tray-icon.png",
-      "iconAsTemplate": true
     }
   },
 
