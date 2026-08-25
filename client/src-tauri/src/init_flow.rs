@@ -476,7 +476,7 @@ async fn run_stage_4_start_backend(
                 break;
             }
 
-            if let Err(e) = spawn_result {
+            if let Some(Err(e)) = spawn_result {
                 if attempt < max_retries {
                     log::warn!("[init] ComfyUI 启动失败，{} 秒后重试: {}", attempt * 5, e);
                     drop(mgr);

@@ -123,7 +123,13 @@ impl ProcessManager {
             }
         };
 
-        let python = crate::paths::python_executable().map_err(|e| e.to_string())?;
+        let python = match crate::paths::python_executable() {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("[comfyui] 未找到 Python 可执行文件，跳过 ComfyUI: {}", e);
+                return None;
+            }
+        };
 
         Some(
             self.spawn_with_retry(
