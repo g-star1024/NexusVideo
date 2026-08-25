@@ -26,8 +26,9 @@ extern crate self as nexusvideo_client_lib;
 
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{SystemTray, SystemTrayEvent};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -62,7 +63,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
         .manage(InitState::new())
-        .system_tray(SystemTray::new())
         .setup(|app| {
             // ==================================================================
             // Task #13: 安装全局 panic hook（崩溃日志系统）
@@ -88,27 +88,42 @@ pub fn run() {
 
                 let tray_menu = Menu::with_items(
                     &handle,
-                    &[&open_item, &Menu::new(&handle).unwrap(), &quit_item],
+                    &[&open_item, &quit_item],
                 )
                 .map_err(|e| e.to_string())?;
 
-                app.tray().set_menu(tray_menu).map_err(|e| e.to_string())?;
+                let icon_path = std::path::PathBuf::from("icons/tray-icon.png");
+                let icon = Image::from_path(&icon_path)
+                    .map_err(|e| e.to_string())?;
 
-                app.on_system_tray_event(|app, event| match event {
-                    SystemTrayEvent::LeftClick { .. } => {
-                        let _ = app.emit("ShowWindow", ());
-                    }
-                    SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-                        "show_window" => {
-                            let _ = app.emit("ShowWindow", ());
+                TrayIconBuilder::new()
+                    .with_id("tray")
+                    .icon(icon)
+                    .icon_as_template(true)
+                    .tooltip("NexusVideo")
+                    .menu(&tray_menu)
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click { button, .. } = event {
+                            if button == MouseButton::Left {
+                                let _ = tray.app_handle().emit("ShowWindow", ());
+                            }
                         }
-                        "quit" => {
-                            let _ = app.emit("Quit", ());
+                    })
+                    .on_menu_event(|app, event| {
+                        if let Some(menu_item_id) = event.menu_item_id() {
+                            match menu_item_id.as_str() {
+                                "show_window" => {
+                                    let _ = app.emit("ShowWindow", ());
+                                }
+                                "quit" => {
+                                    let _ = app.emit("Quit", ());
+                                }
+                                _ => {}
+                            }
                         }
-                        _ => {}
-                    },
-                    _ => {}
-                });
+                    })
+                    .build(&handle)
+                    .map_err(|e| e.to_string())?;
 
                 log::info!("[tray] 系统托盘菜单已注册");
             }
