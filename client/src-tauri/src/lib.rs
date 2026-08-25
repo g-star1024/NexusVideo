@@ -26,7 +26,7 @@ extern crate self as nexusvideo_client_lib;
 
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
-use tauri::image::Image;
+use tauri::Listener;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton};
 use tauri::Manager;
@@ -92,14 +92,9 @@ pub fn run() {
                 )
                 .map_err(|e| e.to_string())?;
 
-                let icon_path = std::path::PathBuf::from("icons/tray-icon.png");
-                let icon = Image::from_path(&icon_path)
-                    .map_err(|e| e.to_string())?;
-
-                TrayIconBuilder::new()
-                    .with_id("tray")
-                    .icon(icon)
-                    .icon_as_template(true)
+                // Tauri 2.x TrayIconBuilder：不传 icon 也能在 Windows/macOS 正常显示菜单；
+                // Linux 需要 icon+menu 才能显示图标，但 MVP 阶段目标平台是 Win/mac，先无 icon 上线。
+                TrayIconBuilder::<tauri::Wry>::with_id("tray")
                     .tooltip("NexusVideo")
                     .menu(&tray_menu)
                     .on_tray_icon_event(|tray, event| {
