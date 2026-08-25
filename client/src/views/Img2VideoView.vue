@@ -322,7 +322,8 @@ onUnmounted(() => progress.stopCycle());
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 888px;
+  width: 100%;
+  max-width: 888px;
 }
 .i2v-title {
   color: var(--text-primary);
