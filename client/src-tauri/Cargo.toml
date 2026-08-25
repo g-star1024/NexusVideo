@@ -6,7 +6,7 @@
 # ============================================================================
 [package]
 name = "nexusvideo-client"
-version = "0.2.4"
+version = "0.2.5"
 description = "NexusVideo AI 视频生成桌面客户端"
 authors = ["NexusVideo Team"]
 edition = "2021"
@@ -22,7 +22,7 @@ tauri-build = { version = "2.0.4", features = [] }
 
 [dependencies]
 # ---- Tauri 核心 (v2) — 锁定版本避免无 Cargo.lock 时解析到 breaking change 版本 ----
-tauri = { version = "2.0.4", features = ["devtools"] }
+tauri = { version = "2.0.4", features = ["devtools", "tray-icon"] }
 tauri-plugin-shell = "2.0.1"
 tauri-plugin-dialog = "2.0.3"
 tauri-plugin-fs = "2.0.1"
