@@ -27,7 +27,8 @@ extern crate self as nexusvideo_client_lib;
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
 use tauri::menu::{Menu, MenuItem};
-use tauri::{Manager, SystemTray};
+use tauri::tray::{SystemTray, SystemTrayEvent};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -94,10 +95,10 @@ pub fn run() {
                 app.tray().set_menu(tray_menu).map_err(|e| e.to_string())?;
 
                 app.on_system_tray_event(|app, event| match event {
-                    tauri::SystemTrayEvent::LeftClick { .. } => {
+                    SystemTrayEvent::LeftClick { .. } => {
                         let _ = app.emit("ShowWindow", ());
                     }
-                    tauri::SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
+                    SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                         "show_window" => {
                             let _ = app.emit("ShowWindow", ());
                         }
