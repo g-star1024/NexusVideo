@@ -101,6 +101,7 @@ nexusvideo.db
 # ==================== NexusVideo specific ====================
 uploads/
 logs/
+data/
 .workbuddy/
 
 # ==================== Tauri ====================
