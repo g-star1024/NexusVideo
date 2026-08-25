@@ -383,22 +383,26 @@ jobs:
           source resources/python_env/bin/activate
           echo "  [debug] 激活后 python: $(which python)"
           echo "  [debug] 激活后 pip: $(which pip)"
-          pip install --upgrade pip setuptools wheel 2>&1 | tail -3
+          python3 -m pip install --upgrade pip setuptools wheel 2>&1 | tail -3
           echo "  [debug] pip 版本: $(pip --version)"
 
           max_retries=2
+          install_ok=0
           for i in $(seq 1 $max_retries); do
-            echo "  [attempt $i/$max_retries] pip install -r backend/requirements-pack.txt --timeout 120"
-            pip install -r backend/requirements-pack.txt --timeout 120 2>&1 | tail -10
-            if [ $? -eq 0 ]; then
+            echo "  [attempt $i/$max_retries] python -m pip install -r backend/requirements-pack.txt --timeout 120"
+            python3 -m pip install -r backend/requirements-pack.txt --timeout 120 2>&1 | tee /tmp/pip_install.log | tail -5
+            pip_exit=${PIPESTATUS[0]}
+            echo "  [debug] pip exit code: $pip_exit"
+            if [ $pip_exit -eq 0 ]; then
+              install_ok=1
               echo "  [OK] 安装成功"
               break
             fi
             echo "  [WARN] 安装失败，重试..."
           done
-          if ! pip list 2>/dev/null | grep -q fastapi; then
-            echo "::error::pip install 失败（已重试 $max_retries 次），fastapi 未安装"
-            pip install fastapi --timeout 120 2>&1 | tail -5
+          if [ $install_ok -ne 1 ]; then
+            echo "::error::pip install 失败（已重试 $max_retries 次）"
+            python3 -m pip install fastapi --timeout 120 2>&1 | tail -5
             exit 1
           fi
 

@@ -97,10 +97,10 @@ if (-not $HasPython -or -not $HasPip) {
 # 2. Upgrade pip + install deps（带重试和超时）
 # ---------------------------------------------------------------
 Write-Host ""
-Write-Host "[2/6] 升级 pip..."
-& $PipExe install --upgrade pip 2>&1 | ForEach-Object { Write-Host "  [pip] $_" }
+Write-Host "[2/6] 升级 pip（Windows 必须用 python -m pip，不能直接用 pip.exe）..."
+& $PythonEnvExe -m pip install --upgrade pip 2>&1 | ForEach-Object { Write-Host "  [pip] $_" }
 if ($LASTEXITCODE -ne 0) { throw "pip 升级失败" }
-Write-Host "  [OK] pip 版本: $(& $PipExe --version 2>&1)"
+Write-Host "  [OK] pip 版本: $(& $PythonEnvExe -m pip --version 2>&1)"
 
 Write-Host ""
 Write-Host "[3/6] 安装依赖: $ReqFile"
@@ -110,8 +110,8 @@ Get-Content $ReqFile | ForEach-Object { Write-Host "    $_" }
 $maxRetries = 2
 $success = $false
 for ($i = 1; $i -le $maxRetries; $i++) {
-    Write-Host "  [attempt $i/$maxRetries] pip install -r $ReqFile --timeout 120..."
-    & $PipExe install -r $ReqFile --timeout 120 2>&1 | ForEach-Object { Write-Host "  [pip] $_" }
+    Write-Host "  [attempt $i/$maxRetries] python -m pip install -r $ReqFile --timeout 120..."
+    & $PythonEnvExe -m pip install -r $ReqFile --timeout 120 2>&1 | ForEach-Object { Write-Host "  [pip] $_" }
     if ($LASTEXITCODE -eq 0) {
         $success = $true
         break
@@ -121,7 +121,7 @@ for ($i = 1; $i -le $maxRetries; $i++) {
 if (-not $success) {
     Write-Host "::error::pip install 失败（已重试 $maxRetries 次）"
     Write-Host "[debug] 尝试单独安装 fastapi 以定位问题:"
-    & $PipExe install fastapi --timeout 120 2>&1 | ForEach-Object { Write-Host "  [pip] $_" }
+    & $PythonEnvExe -m pip install fastapi --timeout 120 2>&1 | ForEach-Object { Write-Host "  [pip] $_" }
     throw "pip install 失败"
 }
 Write-Host "  [OK] 所有依赖安装成功"
