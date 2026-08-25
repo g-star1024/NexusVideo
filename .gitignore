@@ -107,3 +107,6 @@ logs/
 tauri.conf.json.exampledata/
 *.pyc
 .venv-py312/
+backend/data/*.db
+backend/data/*.db-shm
+backend/data/*.db-wal
