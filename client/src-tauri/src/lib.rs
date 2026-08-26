@@ -106,23 +106,17 @@ pub fn run() {
                 // ==================================================================
                 // 用闭包封装图标加载逻辑，让 `return None` 正确从闭包返回 Option<Image>
                 let tray_icon: Option<Image> = (|| -> Option<Image> {
-                    let candidates: Vec<std::path::PathBuf> = vec![
-                        app.path()
-                            .resource_dir()
-                            .ok()
-                            .and_then(|d| Some(d.join("icons").join("tray-icon.png"))),
-                        app.path()
-                            .resource_dir()
-                            .ok()
-                            .and_then(|d| Some(d.join("tray-icon.png"))),
-                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    let candidates: Vec<std::path::PathBuf> = [
+                        app.path().resource_dir().ok().map(|d| d.join("icons").join("tray-icon.png")),
+                        app.path().resource_dir().ok().map(|d| d.join("tray-icon.png")),
+                        Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                             .join("icons")
-                            .join("tray-icon.png"),
-                        std::env::current_dir()
-                            .ok()
-                            .map(|d| d.join("icons").join("tray-icon.png"))
-                            .unwrap_or_default(),
-                    ];
+                            .join("tray-icon.png")),
+                        std::env::current_dir().ok().map(|d| d.join("icons").join("tray-icon.png")),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
 
                     let icon_path = candidates
                         .iter()
