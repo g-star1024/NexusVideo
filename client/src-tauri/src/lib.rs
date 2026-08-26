@@ -27,7 +27,7 @@ extern crate self as nexusvideo_client_lib;
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
 use tauri::{Emitter, Listener, Manager};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, MenuId};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -104,16 +104,11 @@ pub fn run() {
                         }
                     })
                     .on_menu_event(|app, event| {
-                        if let Some(menu_item_id) = event.menu_item_id() {
-                            match menu_item_id.as_str() {
-                                "show_window" => {
-                                    let _ = app.emit("ShowWindow", ());
-                                }
-                                "quit" => {
-                                    let _ = app.emit("Quit", ());
-                                }
-                                _ => {}
-                            }
+                        // MenuEvent.id 是 public 字段 (MenuId)
+                        if event.id == MenuId::new("show_window") {
+                            let _ = app.emit("ShowWindow", ());
+                        } else if event.id == MenuId::new("quit") {
+                            let _ = app.emit("Quit", ());
                         }
                     })
                     .build(&handle)
@@ -160,9 +155,9 @@ pub fn run() {
             // 拦截窗口关闭 → 隐藏窗口（最小化到托盘），通过托盘菜单重新打开或退出。
             // ==================================================================
             let app_handle_setup = app.handle().clone();
-            app.listen("ShowWindow", move |_app, _event| {
+            // v2 Listener::listen 闭包签名：Fn(Event) — 仅 1 个参数，不接收 App 引用
+            app.listen("ShowWindow", move |_event| {
                 let h = app_handle_setup.clone();
-                // 在后台异步恢复窗口（避免在事件回调里阻塞）
                 tauri::async_runtime::spawn(async move {
                     if let Some(window) = h.get_webview_window("main") {
                         log::info!("[tray] 打开主窗口");
@@ -176,11 +171,11 @@ pub fn run() {
                 });
             });
 
-            app.listen("Quit", move |app, _event| {
+            let app_handle_quit = app.handle().clone();
+            app.listen("Quit", move |_event| {
                 log::info!("[tray] 用户选择退出");
-                // 关闭所有窗口 → 触发 Destroyed 事件 → 触发 on_window_event 清理子进程
-                // App::handle() → AppHandle，AppHandle 才有 exit(i32) 方法
-                app.handle().exit(0);
+                // AppHandle::exit(i32) — 关闭所有窗口并退出进程
+                app_handle_quit.exit(0);
             });
 
             Ok(())
