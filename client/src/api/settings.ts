@@ -17,7 +17,7 @@ import { getApiBaseUrl } from './utils';
 // ---------- 类型定义（与后端对齐） ----------
 
 export type ComponentStatus = 'ok' | 'missing' | 'error' | 'checking';
-export type ComponentAction = 'start' | 'install' | 'download' | 'repair';
+export type ComponentAction = 'start' | 'stop' | 'restart' | 'install' | 'download' | 'repair';
 
 export interface ComponentStatusItem {
   id: string;                 // component_id，如 comfyui
@@ -88,6 +88,8 @@ export function actionLabel(a?: ComponentAction | null): string {
   if (!a) return '';
   const map: Record<string, string> = {
     start:    '启动',
+    stop:     '停止',
+    restart:  '重启',
     install:  '安装',
     download: '下载',
     repair:   '修复',
@@ -96,8 +98,8 @@ export function actionLabel(a?: ComponentAction | null): string {
 }
 
 export function actionDanger(a?: ComponentAction | null): boolean {
-  // 下载/安装操作体积大，用危险按钮样式提示用户注意
-  return a === 'download' || a === 'install';
+  // 停止/重启/下载/安装操作体积大，用危险按钮样式提示用户注意
+  return a === 'download' || a === 'install' || a === 'stop' || a === 'restart';
 }
 
 // 为组件项填充中文标签
@@ -153,41 +155,96 @@ async function requestPost<T>(path: string, body: unknown): Promise<T> {
 
 /**
  * 获取所有组件状态
- * 后端返回结构（可能为数组或对象包裹，兼容处理）
+ * 后端返回：{"success": true, "data": {"components": [...], "checked_at": "..."}}
+ * 注意：`action_button` 字段是中文标签（"启动"/"下载"），需映射为枚举 action
  */
+const ACTION_BUTTON_MAP: Record<string, ComponentAction> = {
+  '启动': 'start',
+  '停止': 'stop',
+  '重启': 'restart',
+  '安装': 'install',
+  '修复': 'repair',
+  '下载': 'download',
+};
+
 export async function getComponents(): Promise<ComponentStatusItem[]> {
-  const raw = await request<Record<string, unknown>[]>(
+  const raw = await request<{ data?: { components?: Record<string, unknown>[] } }>(
     '/api/v1/settings/components'
   );
-  return raw.map(enrichComponent) as unknown as ComponentStatusItem[];
+  const items = raw?.data?.components || [];
+  return items.map((item) => {
+    // 后端用 action_button（中文），前端用 action（枚举）
+    const btn = item.action_button as string | undefined;
+    const action: ComponentAction | undefined = btn ? ACTION_BUTTON_MAP[btn] : undefined;
+    return enrichComponent({
+      id: item.id as string,
+      status: item.status as ComponentStatus,
+      version: item.version as string | undefined,
+      detail: item.detail as string | undefined,
+      action,
+      size: item.size_gb ? `${item.size_gb}GB` : undefined,
+    }) as unknown as ComponentStatusItem;
+  });
 }
 
 /**
- * 执行组件操作（启动/安装/下载）
+ * 执行组件操作（启动/停止/安装/下载/修复）
+ * 后端返回：{"success": true, "data": {"status": "started", "message": "...", "port": 8188}}
  */
 export async function executeComponentAction(
   componentId: string,
   action: ComponentAction,
 ): Promise<{ status: string; message?: string }> {
-  return requestPost<{ status: string; message?: string }>(
+  const raw = await requestPost<{ data?: { status?: string; message?: string } }>(
     `/api/v1/settings/components/${componentId}/action`,
     { action },
   );
+  return raw.data || { status: 'unknown', message: '操作结果未知' };
 }
 
 /**
  * 获取系统信息
+ * 后端返回：{"success": true, "data": {cpu, cpu_cores, ram_total_gb, ...}}
+ * 需要解包 data 字段并映射为前端 SystemInfo 格式
  */
 export async function getSystemInfo(): Promise<SystemInfo> {
-  return request<SystemInfo>('/api/v1/settings/system');
+  const raw = await request<{ data?: Record<string, unknown> }>(
+    '/api/v1/settings/system'
+  );
+  const d = raw?.data || {};
+  const vram_total = (d.vram_total_gb as number) || 0;
+  const vram_free = (d.vram_available_gb as number) || 0;
+  const ram_total = (d.ram_total_gb as number) || 0;
+  const ram_available = (d.ram_available_gb as number) || 0;
+  const ram_used_pct = (d.ram_percent as number) || 0;
+  return {
+    os: d.os as string || '未知',
+    gpu: d.gpu as string || '未知',
+    vram: `${vram_free}/${vram_total}GB`,
+    cuda: d.cuda_version as string || d.cuda as string || '-',
+    disk_free: `${(d.disk_free_gb as number) || 0}GB`,
+    ram_total: `${ram_total}GB`,
+    ram_used: `${Math.round(ram_total - ram_available)}GB (${ram_used_pct}%)`,
+    version: d.version as string || d.python_version as string || '-',
+  };
 }
 
 /**
- * 获取最近错误日志（取最后 10 条 ERROR）
+ * 获取最近错误日志
+ * 后端返回：{"success": true, "data": {"log_path": "...", "recent_errors": [...]}}
  */
 export async function getErrorLogs(): Promise<ErrorLog[]> {
-  const raw = await request<ErrorLog[]>('/api/v1/settings/logs');
-  return raw.slice(-10);
+  const raw = await request<{ data?: { recent_errors?: Record<string, unknown>[] } }>(
+    '/api/v1/settings/logs'
+  );
+  const errors = raw?.data?.recent_errors || [];
+  return errors.map((e) => ({
+    timestamp: e.time as string || '',
+    time: (e.time as string || '').split(' ')[1]?.slice(0, 5) || '',
+    level: e.level as 'ERROR' | 'WARN' || 'ERROR',
+    source: e.source as string || 'unknown',
+    message: e.message as string || '',
+  }));
 }
 
 /**
