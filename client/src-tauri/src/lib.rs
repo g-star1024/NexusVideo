@@ -104,10 +104,17 @@ pub fn run() {
                 //   3) CARGO_MANIFEST_DIR/icons/tray-icon.png  — tauri dev 模式（src-tauri/icons/）
                 //   4) current_dir()/icons/tray-icon.png        — 其他 dev 场景
                 // ==================================================================
-                let tray_icon: Option<Image> = {
+                // 用闭包封装图标加载逻辑，让 `return None` 正确从闭包返回 Option<Image>
+                let tray_icon: Option<Image> = (|| -> Option<Image> {
                     let candidates: Vec<std::path::PathBuf> = vec![
-                        app.resources_dir().join("icons").join("tray-icon.png"),
-                        app.resources_dir().join("tray-icon.png"),
+                        app.path()
+                            .resource_dir()
+                            .ok()
+                            .and_then(|d| Some(d.join("icons").join("tray-icon.png"))),
+                        app.path()
+                            .resource_dir()
+                            .ok()
+                            .and_then(|d| Some(d.join("tray-icon.png"))),
                         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                             .join("icons")
                             .join("tray-icon.png"),
@@ -126,57 +133,56 @@ pub fn run() {
                         Some(path) => {
                             log::info!("[tray] 托盘图标路径: {}", path.display());
 
-                            match std::fs::read(&path) {
-                                Ok(raw) => {
-                                    let mut decoder = png::Decoder::new(Cursor::new(raw));
-                                    let mut reader =
-                                        match decoder.read_info() {
-                                            Ok(r) => r,
-                                            Err(e) => {
-                                                log::warn!(
-                                                    "[tray] PNG 解码失败，降级为无图标: {e}"
-                                                );
-                                                return None;
-                                            }
-                                        };
-
-                                    let mut rgba_buffer =
-                                        vec![0u8; reader.output_buffer_size()];
-                                    let info = match reader.next_frame(&mut rgba_buffer) {
-                                        Ok(info) => info,
-                                        Err(e) => {
-                                            log::warn!(
-                                                "[tray] PNG 帧读取失败，降级为无图标: {e}"
-                                            );
-                                            return None;
-                                        }
-                                    };
-
-                                    let (width, height) = (info.width, info.height);
-                                    let expected = width * height * 4;
-                                    if rgba_buffer.len() != expected {
-                                        log::warn!(
-                                            "[tray] PNG 字节数 ({}) 与预期 ({}x{}x4={}) 不符",
-                                            rgba_buffer.len(),
-                                            width,
-                                            height,
-                                            expected
-                                        );
-                                        None
-                                    } else {
-                                        log::info!(
-                                            "[tray] 托盘图标加载成功: {}x{} RGBA",
-                                            width,
-                                            height
-                                        );
-                                        Some(Image::new_owned(rgba_buffer, width, height))
-                                    }
-                                }
+                            let raw = match std::fs::read(&path) {
+                                Ok(raw) => raw,
                                 Err(e) => {
                                     log::warn!("[tray] 读取托盘图标文件失败: {e}");
-                                    None
+                                    return None;
                                 }
+                            };
+
+                            let mut decoder = png::Decoder::new(Cursor::new(raw));
+                            let mut reader = match decoder.read_info() {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    log::warn!(
+                                        "[tray] PNG 解码失败，降级为无图标: {e}"
+                                    );
+                                    return None;
+                                }
+                            };
+
+                            let mut rgba_buffer =
+                                vec![0u8; reader.output_buffer_size()];
+                            let info = match reader.next_frame(&mut rgba_buffer) {
+                                Ok(info) => info,
+                                Err(e) => {
+                                    log::warn!(
+                                        "[tray] PNG 帧读取失败，降级为无图标: {e}"
+                                    );
+                                    return None;
+                                }
+                            };
+
+                            let (width, height) = (info.width, info.height);
+                            let expected: usize = (width * height * 4) as usize;
+                            if rgba_buffer.len() != expected {
+                                log::warn!(
+                                    "[tray] PNG 字节数 ({}) 与预期 ({}x{}x4={}) 不符",
+                                    rgba_buffer.len(),
+                                    width,
+                                    height,
+                                    expected
+                                );
+                                return None;
                             }
+
+                            log::info!(
+                                "[tray] 托盘图标加载成功: {}x{} RGBA",
+                                width,
+                                height
+                            );
+                            Some(Image::new_owned(rgba_buffer, width, height))
                         }
                         None => {
                             log::warn!(
@@ -185,7 +191,7 @@ pub fn run() {
                             None
                         }
                     }
-                };
+                })();
 
                 // 构建 TrayIconBuilder：有 icon 就传 icon，无 icon 就只传 menu（降级）
                 let tray_builder = TrayIconBuilder::<tauri::Wry>::with_id("tray")

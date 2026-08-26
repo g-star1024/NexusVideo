@@ -199,7 +199,10 @@ export async function executeComponentAction(
     `/api/v1/settings/components/${componentId}/action`,
     { action },
   );
-  return raw.data || { status: 'unknown', message: '操作结果未知' };
+  if (raw.data && raw.data.status) {
+    return { status: raw.data.status, message: raw.data.message };
+  }
+  return { status: 'unknown', message: '操作结果未知' };
 }
 
 /**
