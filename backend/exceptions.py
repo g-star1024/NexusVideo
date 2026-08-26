@@ -20,6 +20,9 @@ class ErrorCode:
     INTERNAL_ERROR = "10001"
     SERVICE_UNAVAILABLE = "10002"
 
+    # --- 推理引擎可用性（14xxx） ---
+    INFERENCE_ENGINE_UNAVAILABLE = "14002"  # ComfyUI 未运行，引导跳转设置中心
+
     # --- ComfyUI 进程（11xxx） ---
     COMFYUI_NOT_RUNNING = "11001"
     COMFYUI_STARTUP_FAILED = "11002"
@@ -66,12 +69,15 @@ class NexusError(Exception):
 # ComfyUI 相关异常
 # ================================================================
 class ComfyUINotRunningError(NexusError):
-    """ComfyUI 进程未启动或已崩溃。"""
+    """ComfyUI 进程未启动或已崩溃。
+
+    返回 503 + error_code=14002，前端据此跳转设置中心引导用户启动 ComfyUI。
+    """
 
     def __init__(self, detail: dict | None = None):
         super().__init__(
             message="ComfyUI 推理引擎未运行，正在尝试自动启动...",
-            error_code=ErrorCode.COMFYUI_NOT_RUNNING,
+            error_code=ErrorCode.INFERENCE_ENGINE_UNAVAILABLE,
             status_code=503,
             detail=detail,
         )

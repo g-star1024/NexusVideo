@@ -36,7 +36,7 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import settings
-from exceptions import NexusError
+from exceptions import NexusError, ComfyUINotRunningError
 
 # ================================================================
 # ComfyUI / 推理相关模块：可选加载（防御性，绝不阻塞注册/登录）
@@ -84,6 +84,16 @@ except Exception as e:  # pragma: no cover - 防御性兜底
 
 # 认证路由：始终加载（不依赖 ComfyUI / torch）
 from routers import auth  # noqa: F401
+
+# 设置中心路由：始终加载（仅依赖轻量依赖 httpx/psutil/subprocess，
+# 不依赖 ComfyUI / torch，设置页面在 ComfyUI 不可用时尤其需要）
+#
+# ⚠️ 注意命名冲突：`routers.settings` 模块名与上方 `config.settings` 全局变量
+#    同名。Python 中 `from routers import settings` 会覆盖同名绑定。
+#    解决：导入后立即从 config 恢复 settings 变量的正确引用。
+from routers import settings as settings_router  # noqa: F401
+from config import settings as _config_settings  # 恢复 config.settings 的引用
+settings = _config_settings  # 确保下方日志配置等处使用的 settings 仍是 config 的实例
 
 
 # ================================================================
@@ -229,6 +239,50 @@ app.add_middleware(
 # ================================================================
 # 异常处理器（统一错误响应格式）
 # ================================================================
+# ================================================================
+# ComfyUI 未运行 — 用户友好错误（P2 阶段：设置中心联动）
+# ================================================================
+# 当用户在视频生成时遇到 ComfyUI 未运行，不再返回模糊的 500，
+# 而是返回明确的业务错误码 14002 + 引导跳转设置中心的建议操作。
+#
+# 前端收到 error_code=14002 时：
+#   1. 不再展示通用 500 错误弹窗
+#   2. 根据 detail.suggested_action="settings" 跳转到设置中心
+#   3. 展示 detail.hint 的友好提示文案
+# ================================================================
+@app.exception_handler(ComfyUINotRunningError)
+async def comfyui_not_running_handler(
+    request: Request, exc: ComfyUINotRunningError
+) -> JSONResponse:
+    """
+    ComfyUI 未运行时的专门异常处理器。
+
+    返回 503 Service Unavailable（语义比 500 更准确——服务暂不可用，
+    而非内部崩溃）。
+
+    前端可依赖 error_code=14002 做差异化 UI 处理：
+      - 跳转设置中心
+      - 展示一键启动 ComfyUI 的引导
+    """
+    logger.warning(
+        f"ComfyUI 推理引擎未就绪：url={settings.comfyui_base_url} "
+        f"path={request.url.path}"
+    )
+    return JSONResponse(
+        status_code=503,  # Service Unavailable — 语义更准确
+        content={
+            "success": False,
+            "error_code": "14002",  # 业务错误码：推理引擎不可用
+            "message": "推理引擎未就绪，请前往设置中心检查组件状态并启动 ComfyUI",
+            "detail": {
+                "comfyui_url": settings.comfyui_base_url,
+                "hint": "本地 ComfyUI 服务未启动",
+                "suggested_action": "settings",  # 前端据此跳转设置中心
+            },
+        },
+    )
+
+
 @app.exception_handler(NexusError)
 async def nexus_error_handler(request: Request, exc: NexusError) -> JSONResponse:
     """
@@ -274,6 +328,7 @@ async def generic_error_handler(request: Request, exc: Exception) -> JSONRespons
 # ================================================================
 # --- P2 阶段新增路由：认证（始终注册，不依赖 ComfyUI） ---
 app.include_router(auth.router)              # /api/v1/auth/*
+app.include_router(settings_router.router)   # /api/v1/settings/*  设置中心
 
 # --- 推理 / 生成相关路由：仅在 ComfyUI 模块可用时注册 ---
 if comfyui_modules_available:
@@ -349,6 +404,11 @@ async def root() -> dict:
             "skill_detail": "GET /skills/{skill_id}",
             "skill_readiness": "GET /skills/{skill_id}/readiness",
             "skill_generate": "POST /skills/{skill_id}/generate",
+            # 设置中心（P2 阶段）
+            "settings_components": "GET /api/v1/settings/components",
+            "settings_component_action": "POST /api/v1/settings/components/{id}/action",
+            "settings_system": "GET /api/v1/settings/system",
+            "settings_logs": "GET /api/v1/settings/logs",
         },
     }
 

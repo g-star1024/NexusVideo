@@ -35,6 +35,30 @@ export type GenerateMode = 't2v' | 'i2v' | 'v2v';
 export type GenerateState = 'idle' | 'generating' | 'completed' | 'failed';
 export type CloudMode = 'local' | 'cloud';
 
+/** 推理引擎未就绪的专用错误码 */
+export const ERROR_CODE_ENGINE_NOT_READY = '14002';
+
+/**
+ * 从错误字符串中尝试提取后端 error_code。
+ * 兼容格式：
+ *   "error_code: 14002, message: ..."
+ *   {"error_code":"14002",...}
+ *   "14002: 推理引擎未就绪"
+ *   "error: 14002"
+ */
+export function extractErrorCode(errMsg: string | null | undefined): string | null {
+  if (!errMsg) return null;
+  const m = errMsg.match(/(?:error_code\s*[=:]\s*)?([0-9]{5})/i);
+  if (m) return m[1];
+  return null;
+}
+
+/** 判断是否为"推理引擎未就绪"类错误 */
+export function isEngineNotReadyError(errMsg: string | null | undefined): boolean {
+  const code = extractErrorCode(errMsg);
+  return code === ERROR_CODE_ENGINE_NOT_READY;
+}
+
 export interface HistoryItem {
   id: string;
   mode: GenerateMode;
@@ -59,6 +83,8 @@ export const useGenerateStore = defineStore('generate', () => {
   const currentPrompt = ref('');
   const currentResultUrl = ref<string | null>(null);
   const error = ref<string | null>(null);
+  // 推理引擎未就绪标志：error_code=14002 时置 true，UI 显示"前往设置中心"弹窗
+  const engineNotReady = ref(false);
 
   // ---- 计算属性 ----
   const isGenerating = computed(() => state.value === 'generating');
@@ -171,6 +197,7 @@ export const useGenerateStore = defineStore('generate', () => {
           .onError((p) => {
             state.value = 'failed';
             error.value = p.error || '云端生成失败';
+            engineNotReady.value = isEngineNotReadyError(p.error);
           });
         return;
       } catch (e) {
@@ -203,10 +230,15 @@ export const useGenerateStore = defineStore('generate', () => {
         .onError((s) => {
           state.value = 'failed';
           error.value = s.error || '生成失败，请重试';
+          // error_code=14002 → 提示前往设置中心
+          engineNotReady.value = isEngineNotReadyError(s.error);
         });
     } catch (e) {
       state.value = 'failed';
-      error.value = `发起请求失败: ${e}`;
+      const msg = `发起请求失败: ${e}`;
+      error.value = msg;
+      // 兼容：如果错误来自 IPC，也检测 14002
+      engineNotReady.value = isEngineNotReadyError(msg);
     }
   }
 
@@ -297,5 +329,6 @@ export const useGenerateStore = defineStore('generate', () => {
     startGeneration, cancelGeneration,
     loadHistory, clearHistory, removeHistory,
     refreshBackendStatus,
+    engineNotReady,
   };
 });
