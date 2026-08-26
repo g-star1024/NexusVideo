@@ -26,7 +26,9 @@ extern crate self as nexusvideo_client_lib;
 
 use nexusvideo_client_lib::init_flow::InitState;
 use nexusvideo_client_lib::state::AppState;
+use std::io::Cursor;
 use tauri::{Emitter, Listener, Manager};
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, MenuId};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton};
 
@@ -91,10 +93,116 @@ pub fn run() {
                 )
                 .map_err(|e| e.to_string())?;
 
-                // Tauri 2.x TrayIconBuilder：不传 icon 也能在 Windows/macOS 正常显示菜单；
-                // Linux 需要 icon+menu 才能显示图标，但 MVP 阶段目标平台是 Win/mac，先无 icon 上线。
-                TrayIconBuilder::<tauri::Wry>::with_id("tray")
-                    .tooltip("NexusVideo")
+                // ==================================================================
+                // 托盘图标：从 resources/ 中的 PNG 解码为 RGBA，供 TrayIconBuilder.icon() 使用。
+                // Tauri v2 的 Image::new_owned 接收原始 RGBA 字节 (width*height*4 bytes)。
+                // png crate 在运行时解码 PNG，比 build.rs 解码更灵活（无需额外 build-dep）。
+                //
+                // 路径解析优先级（release → dev fallback）：
+                //   1) app.resources_dir()/icons/tray-icon.png  — release 打包后（bundle.resources 声明）
+                //   2) app.resources_dir()/tray-icon.png        — release 打包后（Tauri 展平资源路径时）
+                //   3) CARGO_MANIFEST_DIR/icons/tray-icon.png  — tauri dev 模式（src-tauri/icons/）
+                //   4) current_dir()/icons/tray-icon.png        — 其他 dev 场景
+                // ==================================================================
+                let tray_icon: Option<Image> = {
+                    let candidates: Vec<std::path::PathBuf> = vec![
+                        app.resources_dir().join("icons").join("tray-icon.png"),
+                        app.resources_dir().join("tray-icon.png"),
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("icons")
+                            .join("tray-icon.png"),
+                        std::env::current_dir()
+                            .ok()
+                            .map(|d| d.join("icons").join("tray-icon.png"))
+                            .unwrap_or_default(),
+                    ];
+
+                    let icon_path = candidates
+                        .iter()
+                        .find(|p| p.exists())
+                        .map(|p| p.clone());
+
+                    match icon_path {
+                        Some(path) => {
+                            log::info!("[tray] 托盘图标路径: {}", path.display());
+
+                            match std::fs::read(&path) {
+                                Ok(raw) => {
+                                    let mut decoder = png::Decoder::new(Cursor::new(raw));
+                                    let mut reader =
+                                        match decoder.read_info() {
+                                            Ok(r) => r,
+                                            Err(e) => {
+                                                log::warn!(
+                                                    "[tray] PNG 解码失败，降级为无图标: {e}"
+                                                );
+                                                return None;
+                                            }
+                                        };
+
+                                    let mut rgba_buffer =
+                                        vec![0u8; reader.output_buffer_size()];
+                                    let info = match reader.next_frame(&mut rgba_buffer) {
+                                        Ok(info) => info,
+                                        Err(e) => {
+                                            log::warn!(
+                                                "[tray] PNG 帧读取失败，降级为无图标: {e}"
+                                            );
+                                            return None;
+                                        }
+                                    };
+
+                                    let (width, height) = (info.width, info.height);
+                                    let expected = width * height * 4;
+                                    if rgba_buffer.len() != expected {
+                                        log::warn!(
+                                            "[tray] PNG 字节数 ({}) 与预期 ({}x{}x4={}) 不符",
+                                            rgba_buffer.len(),
+                                            width,
+                                            height,
+                                            expected
+                                        );
+                                        None
+                                    } else {
+                                        log::info!(
+                                            "[tray] 托盘图标加载成功: {}x{} RGBA",
+                                            width,
+                                            height
+                                        );
+                                        Some(Image::new_owned(rgba_buffer, width, height))
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("[tray] 读取托盘图标文件失败: {e}");
+                                    None
+                                }
+                            }
+                        }
+                        None => {
+                            log::warn!(
+                                "[tray] 所有候选路径均无托盘图标文件，降级为无图标"
+                            );
+                            None
+                        }
+                    }
+                };
+
+                // 构建 TrayIconBuilder：有 icon 就传 icon，无 icon 就只传 menu（降级）
+                let tray_builder = TrayIconBuilder::<tauri::Wry>::with_id("tray")
+                    .tooltip("NexusVideo");
+
+                let tray_builder =
+                    match tray_icon {
+                        Some(icon) => tray_builder.icon(icon),
+                        None => {
+                            log::warn!(
+                                "[tray] 无法加载托盘图标，将仅显示菜单（无图标）"
+                            );
+                            tray_builder
+                        }
+                    };
+
+                tray_builder
                     .menu(&tray_menu)
                     .on_tray_icon_event(|tray, event| {
                         if let TrayIconEvent::Click { button, .. } = event {

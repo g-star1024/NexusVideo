@@ -63,7 +63,8 @@
     ],
     "resources": [
       "../../resources/python_env",
-      "../../resources/backend"
+      "../../resources/backend",
+      "icons/tray-icon.png"
     ],
     "copyright": "© 2026 NexusVideo",
     "category": "Productivity",

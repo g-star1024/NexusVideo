@@ -72,6 +72,11 @@ backtrace = "0.3"
 # ---- 时间戳 ----
 chrono = { version = "0.4", features = ["serde"] }
 
+# ---- PNG 解码（托盘图标在运行时从 PNG 解码为 RGBA，供 TrayIconBuilder.icon() 使用）----
+# Tauri v2 的 TrayIconBuilder::icon() 接收 tauri::image::Image，需传入 RGBA 字节。
+# 不能在 build.rs 中解码（无 image crate），改为运行时解码。png crate 极轻量（~30KB 编译产物）。
+png = "0.17"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = []
