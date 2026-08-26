@@ -111,6 +111,7 @@ export const useGenerateStore = defineStore('generate', () => {
     imagePath?: string;
     motionStrength?: number; // 1-10
     style?: string;
+    skillParams?: Record<string, unknown>; // 技能内置：前端参数→ComfyUI 节点字段映射（Skill Registry）
   }) {
     // ---- 检查认证与额度 ----
     const authStore = useAuthStore();
@@ -133,13 +134,13 @@ export const useGenerateStore = defineStore('generate', () => {
             : 'video2video',
       prompt: params.prompt,
       image_path: params.imagePath,
-      params: {},
+      params: { ...(params.skillParams || {}) },
     };
     if (params.motionStrength != null) {
-      backendParams.params = { denoising_strength: params.motionStrength / 10 };
+      backendParams.params = { ...backendParams.params, denoising_strength: params.motionStrength / 10 };
     }
     if (params.style) {
-      backendParams.params = { ...(backendParams.params || {}), style: params.style };
+      backendParams.params = { ...backendParams.params, style: params.style };
     }
 
     // ---- 云端模式：先尝试云端，失败自动降级本地 ----

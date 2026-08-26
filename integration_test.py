@@ -10,8 +10,8 @@ import sys, pathlib, uuid, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent / "backend"))
 
-test_suffix = str(int(time.time() * 1000) % 100000000)  # 8-digit unique number
-test_phone = f"138{test_suffix}"  # 11-digit Chinese phone
+test_suffix = str(int(time.time() * 1000) % 100000000).zfill(8)  # 8-digit zero-padded
+test_phone = f"138{test_suffix}"  # 11-digit Chinese phone (138 + 8 digits)
 test_username = f"testuser_{uuid.uuid4().hex[:8]}"
 
 from fastapi.testclient import TestClient

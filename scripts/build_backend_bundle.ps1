@@ -67,8 +67,7 @@ Write-Host "  [debug] venv 模块: $VenvOk"
 # ---------------------------------------------------------------
 Write-Host ""
 Write-Host "[1/6] 创建 venv: $PythonEnv"
-$oldEnv = Get-ChildItem $PythonEnv -ErrorAction SilentlyContinue
-if ($oldEnv) {
+if (Test-Path $PythonEnv) {
     Write-Host "  [WARN] 已有 venv 目录，先清理"
     Remove-Item -Path $PythonEnv -Recurse -Force -ErrorAction SilentlyContinue
 }
