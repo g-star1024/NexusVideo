@@ -159,7 +159,7 @@ def _detect_comfyui() -> dict[str, Any]:
     try:
         resp = httpx.get(
             f"{settings.comfyui_base_url}/system_stats",
-            timeout=httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=2.0),
+            timeout=httpx.Timeout(5.0, connect=2.0, read=3.0, write=3.0, pool=2.0),
         )
         if resp.status_code == 200:
             data = resp.json()

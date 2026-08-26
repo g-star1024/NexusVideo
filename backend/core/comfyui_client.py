@@ -43,6 +43,7 @@ class ComfyUIClient:
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(
+                settings.health_check_timeout,
                 connect=settings.health_check_timeout,
                 # 提交 prompt 不应超过 30s（网络/模型加载除外）
                 read=30.0,
