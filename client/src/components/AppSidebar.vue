@@ -9,11 +9,17 @@
 -->
 <script setup lang="ts">
 import { ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { useGenerateStore } from '../stores/generate';
 
 const store = useGenerateStore();
+const router = useRouter();
 const selectedId = ref<string | null>(null);
 const searchQuery = ref('');
+
+function goToSkills() {
+  router.push('/skills');
+}
 
 // 过滤后的历史列表
 function filteredHistory() {
@@ -100,6 +106,10 @@ function filteredHistory() {
     <!-- 底部计数 -->
     <div class="sidebar__footer">
       共 {{ store.historyCount }} 个作品
+      <button class="sidebar__skills-link" @click="goToSkills()" title="前往技能中心">
+        <span class="sidebar__skills-icon">🧩</span>
+        <span class="sidebar__skills-text">技能中心</span>
+      </button>
     </div>
   </aside>
 </template>
@@ -204,5 +214,34 @@ function filteredHistory() {
   text-align: center;
   color: var(--text-disabled);
   font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.sidebar__skills-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.sidebar__skills-link:hover {
+  border-color: var(--accent-1, #8B5CF6);
+  color: var(--accent-1, #8B5CF6);
+  background: rgba(139, 92, 246, 0.08);
+}
+.sidebar__skills-icon {
+  font-size: 12px;
+}
+.sidebar__skills-text {
+  letter-spacing: 0.04em;
 }
 </style>

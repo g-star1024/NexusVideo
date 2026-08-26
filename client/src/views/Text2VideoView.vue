@@ -15,6 +15,7 @@
 -->
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from 'vue';
+import { useRouter } from 'vue-router';
 import { useGenerateStore } from '../stores/generate';
 import { useProgress, formatRemainingText } from '../composables/useProgress';
 import {
@@ -25,6 +26,11 @@ import {
 
 const store = useGenerateStore();
 const progress = useProgress();
+const router = useRouter();
+
+function goToSettings() {
+  router.push('/settings');
+}
 
 // ---- 用户输入 ----
 const promptText = ref('');
@@ -443,6 +449,13 @@ function toggleAdvanced() {
       <div class="progress-container">
         <p class="progress-container__text" style="color: var(--error)">生成失败</p>
         <p class="progress-container__subtext">{{ store.error }}</p>
+
+        <div v-if="store.engineNotReady" class="engine-not-ready-banner">
+          <p class="engine-not-ready-banner__title">🔧 推理引擎未就绪</p>
+          <p class="engine-not-ready-banner__sub">ComfyUI 未运行或缺少模型，请先完成环境准备</p>
+          <button class="btn-primary engine-not-ready-banner__btn" @click="goToSettings()">前往设置中心</button>
+        </div>
+
         <button class="btn-primary" @click="doGenerate()">重试</button>
       </div>
     </div>
@@ -783,5 +796,40 @@ function toggleAdvanced() {
   font-size: 10px;
   color: var(--text-disabled);
   text-align: center;
+}
+
+/* ---- engineNotReady 横幅（推理引擎未就绪） ---- */
+.engine-not-ready-banner {
+  margin: 14px auto 4px;
+  max-width: 480px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: var(--glass-1);
+  -webkit-backdrop-filter: var(--glass-blur-1);
+  backdrop-filter: var(--glass-blur-1);
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.10), inset 0 0 12px rgba(245, 158, 11, 0.06);
+}
+.engine-not-ready-banner__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #f59e0b;
+}
+.engine-not-ready-banner__sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  text-align: center;
+}
+.engine-not-ready-banner__btn {
+  margin-top: 4px;
+  padding: 8px 20px;
+  font-size: 13px;
 }
 </style>
