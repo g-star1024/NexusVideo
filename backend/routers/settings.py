@@ -14,7 +14,8 @@ NexusVideo Backend - 设置中心路由
 
 API 清单：
   GET  /api/v1/settings/components           组件状态检测
-  POST /api/v1/settings/components/{id}/action  执行组件操作（启动/下载/修复）
+  POST /api/v1/settings/components/{id}/action  执行组件操作（启动/下载/修复/安装）
+  GET  /api/v1/settings/components/comfyui/install-status  ComfyUI 安装进度轮询
   GET  /api/v1/settings/system                系统信息
   GET  /api/v1/settings/logs                  运行日志
 """
@@ -25,6 +26,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -85,6 +87,83 @@ _MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "detail": "AnimateDiff 动画模型，约 3.5GB（显存不足时的保底方案）",
     },
 }
+
+
+# ================================================================
+# ComfyUI 一键安装：常量与全局状态
+# ================================================================
+# 官方仓库（可用 COMFYUI_GIT_MIRROR 环境变量覆盖为镜像/代理地址）
+_COMFYUI_REPO_DEFAULT = "https://github.com/comfyanonymous/ComfyUI.git"
+
+# PyTorch CUDA 轮子索引。cu124 覆盖 Turing(sm_75) ~ Blackwell，
+# 兼容 GTX 16xx / RTX 20xx-40xx；可用 TORCH_INDEX_URL 覆盖为国内镜像。
+_TORCH_CUDA_INDEX_DEFAULT = "https://download.pytorch.org/whl/cu124"
+
+# 各阶段超时（秒）。torch 轮子约 2.5GB，慢网络下需要较长时间。
+_TIMEOUT_GIT_CLONE = 300
+_TIMEOUT_TORCH = 1800
+_TIMEOUT_REQUIREMENTS = 900
+_TIMEOUT_VERIFY = 120
+
+# 各阶段预估耗时（秒），仅用于进度条平滑推进（非硬性约束）
+_ETA_GIT_CLONE = 60.0
+_ETA_TORCH = 600.0
+_ETA_REQUIREMENTS = 180.0
+
+# 阶段 → (进度区间下界, 上界, 中文标签)
+_INSTALL_STAGES: dict[str, tuple[int, int, str]] = {
+    "precheck": (0, 5, "环境检查"),
+    "clone": (5, 40, "下载 ComfyUI 源码"),
+    "torch": (40, 80, "安装 PyTorch（CUDA 加速）"),
+    "requirements": (80, 96, "安装依赖库"),
+    "verify": (96, 100, "校验安装结果"),
+    "done": (100, 100, "安装完成"),
+    "failed": (0, 0, "安装失败"),
+}
+
+# 安装失败错误码。
+# 注意：exceptions.py 中 11003 当前已被 COMFYUI_TIMEOUT 占用，
+# 此处沿用团队约定的 11003 以保持前后端契约一致，并通过
+# detail.error_kind = "comfyui_install_failed" 做二次区分。
+# 后续如在 exceptions.py 补充 COMFYUI_INSTALL_FAILED = "11008"，
+# 只需改动此处一行常量即可完成迁移。
+_ERR_COMFYUI_INSTALL_FAILED = "11003"
+
+# 安装日志尾部保留行数（供前端展示"正在做什么"与排障）
+_INSTALL_LOG_TAIL_MAX = 60
+
+# 安装任务全局状态。单进程单事件循环内读写，无需加锁。
+_comfyui_install_state: dict[str, Any] = {
+    "status": "idle",              # idle | running | success | failed
+    "progress": 0,                 # 0-100
+    "stage": "",                   # precheck | clone | torch | requirements | verify | done | failed
+    "stage_label": "",             # 中文阶段名，前端可直接展示
+    "message": "",                 # 当前动作的一行描述（子进程最新输出）
+    "hint": None,                  # 失败时的处置建议
+    "error_code": None,
+    "started_at": None,
+    "finished_at": None,
+    "path": None,                  # 安装目标目录
+    "python_executable": None,     # 实际用于安装依赖的解释器
+    "python_warning": None,        # 解释器版本风险提示
+    "cuda_mode": None,             # cuda | cpu
+    "torch_version": None,
+    "cuda_available": None,
+    "mirrors": None,               # 实际生效的镜像配置
+    "log_tail": [],
+}
+
+# 正在执行的安装任务句柄（用于幂等：安装中重复点击不会起第二个任务）
+_comfyui_install_task: "asyncio.Task | None" = None
+
+
+class _InstallError(Exception):
+    """安装流程内部异常，携带面向小白用户的处置建议。"""
+
+    def __init__(self, message: str, hint: str):
+        super().__init__(message)
+        self.message = message
+        self.hint = hint
 
 
 # ================================================================
@@ -212,7 +291,10 @@ def _detect_comfyui() -> dict[str, Any]:
                     "ComfyUI 未运行，且未找到 ComfyUI 安装目录。"
                     f"期望路径：{str(_COMFYUI_DIR)}"
                 ),
-                "action_hint": "请先安装 ComfyUI 推理引擎，再启动服务",
+                "action_hint": (
+                    "点击「安装」自动下载并安装 ComfyUI（含 CUDA 版 PyTorch），"
+                    "首次安装约需 10-30 分钟，取决于网速"
+                ),
                 "action_button": "安装",
             }
 
@@ -526,6 +608,7 @@ def _clean_component(c: dict) -> dict:
         "  - comfyui/start:   启动 ComfyUI 推理引擎\n"
         "  - comfyui/stop:    停止 ComfyUI\n"
         "  - comfyui/restart: 重启 ComfyUI\n"
+        "  - comfyui/install: 一键拉取安装 ComfyUI（异步，返回后轮询 install-status）\n"
         "  - model_*/download: 触发模型下载任务（返回下载进度查询 URL）\n"
         "  - python_env/install: 提示 Python 安装指引\n"
         "  - gpu_driver/install: 提示驱动安装指引\n"
@@ -642,12 +725,674 @@ async def _handle_comfyui_action(op: str) -> dict:
                 "detail": {},
             }
 
+    elif op == "install":
+        return await _install_comfyui()
+
     return {
         "success": False,
         "error_code": "13003",
         "message": f"ComfyUI 不支持操作 {op}",
         "detail": {},
     }
+
+
+# ================================================================
+# ComfyUI 一键安装实现
+# ================================================================
+
+def _install_stage(stage: str) -> tuple[int, int, str]:
+    """取阶段的进度区间与中文标签，未知阶段回落到全区间。"""
+    return _INSTALL_STAGES.get(stage, (0, 100, stage))
+
+
+def _set_install_state(**kwargs: Any) -> None:
+    """局部更新安装状态（仅覆盖传入字段）。"""
+    _comfyui_install_state.update(kwargs)
+
+
+def _enter_stage(stage: str, message: str = "") -> None:
+    """切换阶段：进度归位到该阶段区间下界，并同步中文标签。"""
+    lo, _hi, label = _install_stage(stage)
+    _set_install_state(
+        stage=stage,
+        stage_label=label,
+        progress=lo,
+        message=message or label,
+    )
+    logger.info(f"[comfyui-install] 进入阶段 {stage}（{label}）{('- ' + message) if message else ''}")
+
+
+def _append_install_log(line: str) -> None:
+    """追加一行安装日志（尾部截断，避免内存无界增长）。"""
+    tail = _comfyui_install_state.get("log_tail")
+    if not isinstance(tail, list):
+        tail = []
+        _comfyui_install_state["log_tail"] = tail
+    tail.append(line[:300])
+    if len(tail) > _INSTALL_LOG_TAIL_MAX:
+        del tail[: len(tail) - _INSTALL_LOG_TAIL_MAX]
+
+
+def _resolve_launch_python() -> tuple[str, str | None]:
+    """
+    解析"实际会用来启动 ComfyUI 的 Python 解释器"。
+
+    关键约束：依赖必须装进 process_manager 启动 ComfyUI 时用的那个解释器，
+    否则 ComfyUI 会以 ModuleNotFoundError 崩溃。process_manager 使用的是
+    settings.python_executable，因此这里以它为准。
+
+    返回：(解释器路径, 风险提示或 None)
+    """
+    candidate = (settings.python_executable or "python").strip()
+
+    resolved: str | None = None
+    # 情况 1：配置的是显式路径（含分隔符或直接存在）
+    if any(sep in candidate for sep in ("/", "\\")) or Path(candidate).exists():
+        p = Path(candidate)
+        if p.exists():
+            resolved = str(p)
+    # 情况 2：配置的是命令名，从 PATH 解析
+    if resolved is None:
+        which = shutil.which(candidate)
+        if which:
+            resolved = which
+    # 情况 3：兜底用当前进程解释器（FastAPI 自身所在环境）
+    if resolved is None:
+        resolved = sys.executable
+
+    # 版本风险提示：ComfyUI + torch 生态在 3.10~3.12 最稳
+    warning: str | None = None
+    try:
+        r = subprocess.run(
+            [resolved, "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, timeout=10, text=True,
+        )
+        ver = (r.stdout or "").strip()
+        if ver:
+            major, _, minor = ver.partition(".")
+            try:
+                mj, mn = int(major), int(minor)
+            except ValueError:
+                mj, mn = 0, 0
+            if (mj, mn) < (3, 10):
+                warning = (
+                    f"解释器版本 Python {ver} 过低（ComfyUI 需要 3.10+），"
+                    "建议改用 3.10~3.12 环境"
+                )
+            elif (mj, mn) >= (3, 13):
+                warning = (
+                    f"解释器为 Python {ver}，部分 ComfyUI 依赖尚无 3.13 预编译轮子，"
+                    "如安装失败请改用 Python 3.10~3.12（可通过 NEXUS_PYTHON_EXECUTABLE 指定）"
+                )
+    except Exception as e:
+        warning = f"无法确认解释器版本（{e}）"
+
+    if Path(resolved).resolve() != Path(sys.executable).resolve():
+        logger.warning(
+            f"[comfyui-install] 依赖将安装到 {resolved}（ComfyUI 启动解释器），"
+            f"而非后端自身解释器 {sys.executable}"
+        )
+    return resolved, warning
+
+
+def _has_nvidia_gpu() -> bool:
+    """轻量判断是否存在 NVIDIA 显卡（只看 nvidia-smi 是否可执行）。"""
+    return shutil.which("nvidia-smi") is not None
+
+
+def _resolve_mirrors() -> dict[str, str | None]:
+    """读取镜像/代理相关环境变量。"""
+    return {
+        "git_repo": os.getenv("COMFYUI_GIT_MIRROR") or None,
+        "pip_index_url": os.getenv("PIP_INDEX_URL") or None,
+        "torch_index_url": (
+            os.getenv("TORCH_INDEX_URL")
+            or os.getenv("TORCH_CUDA_INDEX_URL")
+            or None
+        ),
+    }
+
+
+async def _progress_heartbeat(stage: str, expected_seconds: float) -> None:
+    """
+    进度心跳：在阶段区间内随时间线性推进（封顶 95% 区间宽度）。
+
+    必要性：git clone / pip 的输出是突发式的（git 在管道模式下不打印进度），
+    纯靠输出行数驱动进度会让前端进度条长时间"卡住"，用户以为程序死了。
+    """
+    lo, hi, _label = _install_stage(stage)
+    started = time.monotonic()
+    try:
+        while True:
+            await asyncio.sleep(1.0)
+            elapsed = time.monotonic() - started
+            frac = min(0.95, elapsed / max(expected_seconds * 1.15, 1.0))
+            pct = lo + int((hi - lo) * frac)
+            cur = _comfyui_install_state.get("progress") or 0
+            if pct > cur:
+                _set_install_state(progress=pct)
+    except asyncio.CancelledError:
+        raise
+
+
+async def _run_install_step(
+    cmd: list[str],
+    *,
+    stage: str,
+    timeout: int,
+    expected_seconds: float,
+    cwd: Path | None = None,
+    env_extra: dict[str, str] | None = None,
+) -> None:
+    """
+    执行一条安装命令，流式读取输出并实时刷新进度状态。
+
+    - stderr 合并进 stdout，保证报错信息一定进入 log_tail
+    - 超时后 kill 子进程，避免僵尸进程占住磁盘/网络
+    - 返回码非 0 时抛 _InstallError（附带最后几行输出作为根因线索）
+    """
+    logger.info(f"[comfyui-install] 执行：{' '.join(cmd)}")
+    _append_install_log(f"$ {' '.join(cmd)}")
+
+    env = os.environ.copy()
+    # 禁止 git 弹出凭据交互，否则子进程会挂死直到超时
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    if env_extra:
+        env.update(env_extra)
+
+    kwargs: dict[str, Any] = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.STDOUT,
+        "env": env,
+    }
+    if cwd is not None:
+        kwargs["cwd"] = str(cwd)
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+
+    try:
+        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+    except FileNotFoundError:
+        raise _InstallError(
+            f"命令不存在：{cmd[0]}",
+            f"未找到 {cmd[0]}，请确认已安装并加入系统 PATH",
+        )
+    except Exception as e:
+        raise _InstallError(f"启动命令失败：{e}", "请检查系统权限与磁盘状态")
+
+    heartbeat = asyncio.create_task(_progress_heartbeat(stage, expected_seconds))
+
+    async def _pump() -> int:
+        assert proc.stdout is not None
+        while True:
+            raw = await proc.stdout.readline()
+            if not raw:
+                break
+            # pip/git 可能用 \r 刷新同一行，按 \r 再切一次取最后一段
+            text = raw.decode("utf-8", errors="replace").replace("\r", "\n")
+            for piece in text.split("\n"):
+                line = piece.strip()
+                if not line:
+                    continue
+                _append_install_log(line)
+                _set_install_state(message=line[:180])
+        return await proc.wait()
+
+    try:
+        returncode = await asyncio.wait_for(_pump(), timeout=timeout)
+    except asyncio.TimeoutError:
+        _append_install_log(f"[超时] 该步骤超过 {timeout} 秒未完成，已终止")
+        try:
+            proc.kill()
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except Exception:
+            pass
+        raise _InstallError(
+            f"步骤超时（{timeout} 秒）：{cmd[0]}",
+            "网络超时。请检查代理/网络，或配置镜像源后重试："
+            "COMFYUI_GIT_MIRROR（源码）、PIP_INDEX_URL（依赖）、TORCH_INDEX_URL（PyTorch）",
+        )
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    if returncode != 0:
+        tail = _comfyui_install_state.get("log_tail") or []
+        detail_lines = " / ".join(str(x) for x in tail[-5:])
+        raise _InstallError(
+            f"命令返回非 0（exit={returncode}）：{' '.join(cmd[:3])}…",
+            _diagnose_install_failure(detail_lines),
+        )
+
+
+def _diagnose_install_failure(log_tail_text: str) -> str:
+    """
+    根据子进程输出给出根因判断（现象 → 处置），避免只抛一句"安装失败"。
+    """
+    t = log_tail_text.lower()
+    if any(k in t for k in ("could not resolve host", "failed to connect", "timed out",
+                            "connection reset", "ssl", "proxy")):
+        return (
+            "网络无法访问 GitHub / PyPI。请检查代理，或设置镜像源："
+            "COMFYUI_GIT_MIRROR、PIP_INDEX_URL（如清华源 "
+            "https://pypi.tuna.tsinghua.edu.cn/simple）"
+        )
+    if "no space left" in t or "not enough space" in t or "disk full" in t:
+        return "磁盘空间不足。ComfyUI + PyTorch 需要约 10GB 可用空间，请清理磁盘后重试"
+    if "permission denied" in t or "access is denied" in t or "winerror 5" in t:
+        return "文件权限不足。请关闭正在占用该目录的程序，或以管理员身份重新运行 NexusVideo"
+    if "already exists and is not an empty directory" in t:
+        return "目标目录已存在且非空。请删除该目录后重试"
+    if "no matching distribution" in t or "could not find a version" in t:
+        return (
+            "依赖轮子与当前 Python 版本不匹配。建议改用 Python 3.10~3.12 环境"
+            "（通过 NEXUS_PYTHON_EXECUTABLE 指定解释器）后重试"
+        )
+    if "killed" in t or "memory" in t:
+        return "内存不足导致依赖编译被终止。请关闭其他大内存程序后重试"
+    return f"安装未成功。最后输出：{log_tail_text[:300]}"
+
+
+def _comfyui_entry_exists() -> bool:
+    """判断 ComfyUI 是否已安装（以入口文件 main.py 为准）。"""
+    return (_COMFYUI_DIR / settings.comfyui_entry).exists()
+
+
+async def _install_comfyui() -> dict:
+    """
+    一键安装 ComfyUI 入口（非阻塞）。
+
+    立即返回，真正的下载/安装在后台 task 中执行；
+    前端通过 GET /components/comfyui/install-status 轮询进度。
+
+    返回体同时带 data 与 error 字段，兼容前端现有解包逻辑
+    （前端只读 data.status / data.message）。
+    """
+    global _comfyui_install_task
+
+    # --- 幂等 1：已在安装中 → 返回当前进度，不起第二个任务 ---
+    if _comfyui_install_task is not None and not _comfyui_install_task.done():
+        return {
+            "success": True,
+            "data": {
+                "status": "installing",
+                "message": (
+                    f"正在安装：{_comfyui_install_state.get('stage_label') or '准备中'}"
+                    f"（{_comfyui_install_state.get('progress', 0)}%）"
+                ),
+                "progress": _comfyui_install_state.get("progress", 0),
+                "stage": _comfyui_install_state.get("stage"),
+                "poll_url": "/api/v1/settings/components/comfyui/install-status",
+            },
+        }
+
+    # --- 幂等 2：已安装 → 秒返回 ---
+    if _comfyui_entry_exists():
+        _set_install_state(
+            status="success",
+            progress=100,
+            stage="done",
+            stage_label=_install_stage("done")[2],
+            message="ComfyUI 已安装",
+            path=str(_COMFYUI_DIR),
+            error_code=None,
+            hint=None,
+        )
+        return {
+            "success": True,
+            "data": {
+                "status": "already_installed",
+                "message": f"ComfyUI 已安装，可直接启动（{_COMFYUI_DIR}）",
+                "path": str(_COMFYUI_DIR),
+            },
+        }
+
+    # --- 前置检查：目录存在但非空且无 main.py → 残留目录，git clone 必失败 ---
+    if _COMFYUI_DIR.exists():
+        try:
+            not_empty = any(_COMFYUI_DIR.iterdir())
+        except Exception as e:
+            return _install_error_response(
+                f"无法读取目标目录 {_COMFYUI_DIR}：{e}",
+                "请检查目录权限，或在设置中改用其他安装路径",
+            )
+        if not_empty:
+            return _install_error_response(
+                f"目标目录已存在但不是完整的 ComfyUI：{_COMFYUI_DIR}",
+                f"检测到残留文件且缺少 {settings.comfyui_entry}。"
+                f"请手动删除目录 {_COMFYUI_DIR} 后重新点击安装",
+            )
+
+    # --- 前置检查：git 是否可用 ---
+    if shutil.which("git") is None:
+        return _install_error_response(
+            "未检测到 git 命令",
+            "一键安装需要 Git。请先安装 Git（https://git-scm.com/downloads），"
+            "安装时保持默认选项（自动加入 PATH），完成后重启 NexusVideo",
+        )
+
+    # --- 前置检查：磁盘空间（源码 + torch 约需 10GB） ---
+    try:
+        target_probe = _COMFYUI_DIR.parent if not _COMFYUI_DIR.exists() else _COMFYUI_DIR
+        free_gb = shutil.disk_usage(str(target_probe)).free / (1024 ** 3)
+        if free_gb < 10:
+            return _install_error_response(
+                f"磁盘可用空间不足（剩余 {free_gb:.1f}GB）",
+                "ComfyUI 源码 + PyTorch(CUDA) 约需 10GB 可用空间，请清理磁盘后重试",
+            )
+    except Exception as e:
+        logger.warning(f"[comfyui-install] 磁盘空间检查跳过：{e}")
+
+    # --- 重置状态并启动后台安装任务 ---
+    mirrors = _resolve_mirrors()
+    _comfyui_install_state.update({
+        "status": "running",
+        "progress": 0,
+        "stage": "precheck",
+        "stage_label": _install_stage("precheck")[2],
+        "message": "正在检查安装环境…",
+        "hint": None,
+        "error_code": None,
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "path": str(_COMFYUI_DIR),
+        "python_executable": None,
+        "python_warning": None,
+        "cuda_mode": None,
+        "torch_version": None,
+        "cuda_available": None,
+        "mirrors": mirrors,
+        "log_tail": [],
+    })
+
+    _comfyui_install_task = asyncio.create_task(_comfyui_install_worker())
+    logger.info(f"[comfyui-install] 安装任务已启动，目标目录：{_COMFYUI_DIR}")
+
+    return {
+        "success": True,
+        "data": {
+            "status": "installing",
+            "message": (
+                "已开始安装 ComfyUI。将依次完成：下载源码 → 安装 PyTorch → 安装依赖，"
+                "首次安装约需 10-30 分钟（取决于网速），期间请保持网络连接"
+            ),
+            "progress": 0,
+            "stage": "precheck",
+            "path": str(_COMFYUI_DIR),
+            "poll_url": "/api/v1/settings/components/comfyui/install-status",
+            "poll_interval_ms": 1500,
+        },
+    }
+
+
+def _install_error_response(message: str, hint: str) -> dict:
+    """
+    构造安装失败响应，并同步写入全局状态。
+
+    同时提供 data 字段：前端现有 executeComponentAction 只解包 data.status/
+    data.message，带上后用户能看到具体原因而不是"操作结果未知"。
+    """
+    logger.error(f"[comfyui-install] 失败：{message} | 建议：{hint}")
+    _set_install_state(
+        status="failed",
+        stage="failed",
+        stage_label=_install_stage("failed")[2],
+        message=message,
+        hint=hint,
+        error_code=_ERR_COMFYUI_INSTALL_FAILED,
+        finished_at=datetime.now().isoformat(),
+    )
+    return {
+        "success": False,
+        "error_code": _ERR_COMFYUI_INSTALL_FAILED,
+        "message": message,
+        "detail": {
+            "hint": hint,
+            "suggested_action": "settings",
+            "error_kind": "comfyui_install_failed",
+            "component_id": "comfyui",
+            "path": str(_COMFYUI_DIR),
+        },
+        # 兼容前端现有解包逻辑
+        "data": {
+            "status": "install_failed",
+            "message": f"{message}。{hint}",
+        },
+    }
+
+
+async def _comfyui_install_worker() -> None:
+    """
+    后台安装主流程：clone → torch(CUDA) → requirements → verify。
+
+    设计要点：
+      1. 全程只更新 _comfyui_install_state，不抛异常到事件循环
+      2. torch 必须先于 requirements.txt 安装 —— ComfyUI 的 requirements.txt
+         里也有 torch，若先跑它 pip 会拉 CPU 版轮子，导致装完无法用 GPU
+      3. 失败时写入根因诊断 hint，前端直接展示可执行的处置建议
+    """
+    mirrors = _resolve_mirrors()
+    try:
+        # ---------- 阶段 1：环境检查 ----------
+        _enter_stage("precheck", "正在检查 Python 解释器与显卡…")
+        launch_python, py_warning = await asyncio.to_thread(_resolve_launch_python)
+        has_gpu = await asyncio.to_thread(_has_nvidia_gpu)
+        _set_install_state(
+            python_executable=launch_python,
+            python_warning=py_warning,
+            cuda_mode="cuda" if has_gpu else "cpu",
+            # 以 worker 内实际读到的镜像配置为准（worker 可能被独立调用）
+            mirrors=mirrors,
+            path=str(_COMFYUI_DIR),
+        )
+        if py_warning:
+            _append_install_log(f"[提示] {py_warning}")
+        _append_install_log(
+            f"[信息] 依赖安装目标解释器：{launch_python}；"
+            f"{'检测到 NVIDIA 显卡，将安装 CUDA 版 PyTorch' if has_gpu else '未检测到 NVIDIA 显卡，将安装 CPU 版 PyTorch'}"
+        )
+
+        # ---------- 阶段 2：git clone ----------
+        _enter_stage("clone", "正在下载 ComfyUI 源码…")
+        repo = mirrors["git_repo"] or _COMFYUI_REPO_DEFAULT
+        if mirrors["git_repo"]:
+            _append_install_log(f"[信息] 使用 Git 镜像：{repo}")
+        try:
+            _append_install_log(f"[信息] 安装目标（绝对路径）：{_COMFYUI_DIR.resolve()}")
+        except Exception:
+            pass
+        _COMFYUI_DIR.parent.mkdir(parents=True, exist_ok=True)
+        await _run_install_step(
+            ["git", "clone", "--depth", "1", "--single-branch", repo, str(_COMFYUI_DIR)],
+            stage="clone",
+            timeout=_TIMEOUT_GIT_CLONE,
+            expected_seconds=_ETA_GIT_CLONE,
+        )
+        if not _comfyui_entry_exists():
+            raise _InstallError(
+                f"源码下载完成但缺少入口文件 {settings.comfyui_entry}",
+                "仓库内容异常。请删除安装目录后重试，或改用官方仓库地址（清空 COMFYUI_GIT_MIRROR）",
+            )
+
+        # ---------- 阶段 3：PyTorch（先装，避免被 CPU 版覆盖） ----------
+        _enter_stage(
+            "torch",
+            "正在安装 PyTorch（CUDA 加速版，约 2.5GB）…" if has_gpu
+            else "正在安装 PyTorch（CPU 版）…",
+        )
+        torch_cmd = [
+            launch_python, "-m", "pip", "install",
+            "--no-input", "--disable-pip-version-check", "--progress-bar", "off",
+            "torch", "torchvision", "torchaudio",
+        ]
+        if has_gpu:
+            torch_index = mirrors["torch_index_url"] or _TORCH_CUDA_INDEX_DEFAULT
+            torch_cmd += ["--index-url", torch_index]
+            _append_install_log(f"[信息] PyTorch 轮子索引：{torch_index}")
+        elif mirrors["pip_index_url"]:
+            torch_cmd += ["--index-url", mirrors["pip_index_url"]]
+        await _run_install_step(
+            torch_cmd,
+            stage="torch",
+            timeout=_TIMEOUT_TORCH,
+            expected_seconds=_ETA_TORCH,
+        )
+
+        # ---------- 阶段 4：requirements.txt ----------
+        _enter_stage("requirements", "正在安装 ComfyUI 依赖库…")
+        req_file = _COMFYUI_DIR / "requirements.txt"
+        if req_file.exists():
+            req_cmd = [
+                launch_python, "-m", "pip", "install",
+                "--no-input", "--disable-pip-version-check", "--progress-bar", "off",
+                "-r", "requirements.txt",
+            ]
+            if mirrors["pip_index_url"]:
+                req_cmd += ["--index-url", mirrors["pip_index_url"]]
+                _append_install_log(f"[信息] pip 镜像：{mirrors['pip_index_url']}")
+            await _run_install_step(
+                req_cmd,
+                stage="requirements",
+                timeout=_TIMEOUT_REQUIREMENTS,
+                expected_seconds=_ETA_REQUIREMENTS,
+                cwd=_COMFYUI_DIR,
+            )
+        else:
+            _append_install_log("[警告] 未找到 requirements.txt，跳过依赖安装")
+
+        # ---------- 阶段 5：结果校验 ----------
+        _enter_stage("verify", "正在校验安装结果…")
+        if not _comfyui_entry_exists():
+            raise _InstallError(
+                f"校验失败：未找到 {_COMFYUI_DIR / settings.comfyui_entry}",
+                "安装目录不完整，请删除后重新安装",
+            )
+        torch_version, cuda_available = await _verify_torch(launch_python)
+        _set_install_state(torch_version=torch_version, cuda_available=cuda_available)
+        if has_gpu and cuda_available is False:
+            _append_install_log(
+                "[警告] torch 已安装但 torch.cuda.is_available() 为 False，"
+                "生成将退化为 CPU（极慢）"
+            )
+
+        # ---------- 完成 ----------
+        # 安装后模型目录应指向 ComfyUI 内部 models/，同步刷新模块级缓存，
+        # 避免用户装完 ComfyUI 后模型检测仍扫描旧目录。
+        global _MODELS_DIR
+        _MODELS_DIR = _COMFYUI_DIR / "models"
+
+        ok_msg = f"ComfyUI 安装完成（{_COMFYUI_DIR}）"
+        if torch_version:
+            ok_msg += f"，PyTorch {torch_version}"
+            ok_msg += "，CUDA 加速可用" if cuda_available else "，CUDA 不可用（将使用 CPU）"
+        _set_install_state(
+            status="success",
+            stage="done",
+            stage_label=_install_stage("done")[2],
+            progress=100,
+            message=ok_msg,
+            hint=None,
+            error_code=None,
+            finished_at=datetime.now().isoformat(),
+        )
+        _append_install_log(f"[完成] {ok_msg}")
+        logger.info(f"[comfyui-install] {ok_msg}")
+
+    except _InstallError as e:
+        _set_install_state(
+            status="failed",
+            stage="failed",
+            stage_label=_install_stage("failed")[2],
+            message=e.message,
+            hint=e.hint,
+            error_code=_ERR_COMFYUI_INSTALL_FAILED,
+            finished_at=datetime.now().isoformat(),
+        )
+        _append_install_log(f"[失败] {e.message}")
+        logger.error(f"[comfyui-install] 安装失败：{e.message} | 建议：{e.hint}")
+    except asyncio.CancelledError:
+        _set_install_state(
+            status="failed",
+            stage="failed",
+            stage_label=_install_stage("failed")[2],
+            message="安装已取消",
+            hint="安装被中断（可能是后端重启）。请重新点击安装",
+            error_code=_ERR_COMFYUI_INSTALL_FAILED,
+            finished_at=datetime.now().isoformat(),
+        )
+        logger.warning("[comfyui-install] 安装任务被取消")
+        raise
+    except Exception as e:
+        hint = _diagnose_install_failure(str(e))
+        _set_install_state(
+            status="failed",
+            stage="failed",
+            stage_label=_install_stage("failed")[2],
+            message=f"安装过程异常：{e}",
+            hint=hint,
+            error_code=_ERR_COMFYUI_INSTALL_FAILED,
+            finished_at=datetime.now().isoformat(),
+        )
+        _append_install_log(f"[异常] {e}")
+        logger.exception(f"[comfyui-install] 安装过程未预期异常：{e}")
+
+
+async def _verify_torch(launch_python: str) -> tuple[str | None, bool | None]:
+    """
+    校验 torch 是否可用及 CUDA 是否就绪（非致命：失败只记录不阻断）。
+
+    这是排查"装完却跑不动 GPU"的第一现场证据。
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            launch_python, "-c",
+            "import torch,json;print(json.dumps({'v':torch.__version__,"
+            "'cuda':bool(torch.cuda.is_available())}))",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            **({"creationflags": 0x08000000} if sys.platform == "win32" else {}),
+        )
+        out_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_VERIFY)
+        out = (out_bytes or b"").decode("utf-8", errors="replace").strip()
+        _append_install_log(f"[校验] torch 探测输出：{out[-200:]}")
+        for line in reversed(out.splitlines()):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                import json
+                data = json.loads(line)
+                return str(data.get("v")), bool(data.get("cuda"))
+        return None, None
+    except Exception as e:
+        _append_install_log(f"[校验] torch 探测失败：{e}")
+        logger.warning(f"[comfyui-install] torch 校验失败（不阻断）：{e}")
+        return None, None
+
+
+@router.get(
+    "/components/comfyui/install-status",
+    summary="ComfyUI 安装进度",
+    description=(
+        "轮询 ComfyUI 一键安装进度。\n\n"
+        "调用方式：POST /components/comfyui/action {\"action\":\"install\"} 启动安装后，"
+        "按 1.5 秒间隔轮询本接口，直到 status 为 success 或 failed。\n\n"
+        "status: idle（未开始）| running（安装中）| success（成功）| failed（失败）\n"
+        "stage:  precheck | clone | torch | requirements | verify | done | failed\n"
+        "stage_label 为中文阶段名，可直接展示给用户；log_tail 为最近安装日志，用于排障。"
+    ),
+)
+async def get_comfyui_install_status() -> dict:
+    """返回 ComfyUI 安装任务的当前状态快照。"""
+    state = dict(_comfyui_install_state)
+    state["log_tail"] = list(state.get("log_tail") or [])
+    state["installed"] = _comfyui_entry_exists()
+    state["comfyui_path"] = str(_COMFYUI_DIR)
+    # 供前端判断是否需要继续轮询
+    state["is_running"] = state.get("status") == "running"
+    return {"success": True, "data": state}
 
 
 async def _handle_model_download(model_id: str) -> dict:
