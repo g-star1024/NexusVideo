@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from config import settings
+from exceptions import ErrorCode
 
 router = APIRouter(prefix="/api/v1/settings", tags=["设置中心"])
 
@@ -122,12 +123,11 @@ _INSTALL_STAGES: dict[str, tuple[int, int, str]] = {
 }
 
 # 安装失败错误码。
-# 注意：exceptions.py 中 11003 当前已被 COMFYUI_TIMEOUT 占用，
-# 此处沿用团队约定的 11003 以保持前后端契约一致，并通过
-# detail.error_kind = "comfyui_install_failed" 做二次区分。
-# 后续如在 exceptions.py 补充 COMFYUI_INSTALL_FAILED = "11008"，
-# 只需改动此处一行常量即可完成迁移。
-_ERR_COMFYUI_INSTALL_FAILED = "11003"
+# 已收敛为专属错误码 11008（exceptions.ErrorCode.COMFYUI_INSTALL_FAILED），
+# 不再复用 11003（COMFYUI_TIMEOUT），避免"安装失败"与"任务超时"在日志/告警中混淆。
+# 前端只渲染 message、且仅按 status 决定轮询停止，不依赖 error_code 数值，迁移零风险。
+# 保留 detail.error_kind = "comfyui_install_failed" 作为稳定的二级判别键。
+_ERR_COMFYUI_INSTALL_FAILED = ErrorCode.COMFYUI_INSTALL_FAILED
 
 # 安装日志尾部保留行数（供前端展示"正在做什么"与排障）
 _INSTALL_LOG_TAIL_MAX = 60
@@ -1200,10 +1200,13 @@ def _install_error_response(message: str, hint: str) -> dict:
     """
     logger.error(f"[comfyui-install] 失败：{message} | 建议：{hint}")
     _mark_install_failed(message, hint)
+    # 前端错误分支只渲染 message（不读 hint），因此顶层 message 也必须把处置建议合并进去，
+    # 与 data.message、轮询态 _comfyui_install_state["message"] 保持一致。
+    full_message = f"{message}。{hint}" if hint else message
     return {
         "success": False,
         "error_code": _ERR_COMFYUI_INSTALL_FAILED,
-        "message": message,
+        "message": full_message,
         "detail": {
             "hint": hint,
             "suggested_action": "settings",
@@ -1214,7 +1217,7 @@ def _install_error_response(message: str, hint: str) -> dict:
         # 兼容前端现有解包逻辑
         "data": {
             "status": "install_failed",
-            "message": f"{message}。{hint}",
+            "message": full_message,
         },
     }
 

@@ -34,6 +34,9 @@ class ErrorCode:
     SKILL_NOT_FOUND = "11006"              # 技能不存在
     SKILL_DEPENDENCY_MISSING = "11007"    # 技能依赖（模型/自定义节点）缺失
 
+    # --- ComfyUI 安装（11xxx，接在技能段之后）---
+    COMFYUI_INSTALL_FAILED = "11008"      # 一键拉取/安装 ComfyUI 失败（不复用 11003）
+
     # --- 任务（12xxx） ---
     TASK_NOT_FOUND = "12001"
     TASK_TIMEOUT = "12002"

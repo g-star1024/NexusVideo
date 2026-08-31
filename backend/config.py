@@ -47,12 +47,14 @@ class Settings(BaseSettings):
 
     # ComfyUI 启动参数（白皮书 4.1 节：--headless 后台运行）
     comfyui_extra_args: list[str] = Field(
+        # 注意：ComfyUI 的 argparse 不存在 --headless / --windows-foreground，
+        # 带它们会 argparse 报 unrecognized arguments 并以 exit 2 退出。
+        # 禁止自动开浏览器用 --disable-auto-launch；
+        # 本地单机无需 --listen（监听 0.0.0.0 会触发防火墙弹窗，且暴露端口）。
         default_factory=lambda: [
-            "--headless",              # 禁止自动打开浏览器
-            "--windows-foreground",    # Windows 前台优化
-            "--listen",                # 允许外部连接（开发调试用）
+            "--disable-auto-launch",
         ],
-        description="ComfyUI 启动额外参数"
+        description="ComfyUI 启动额外参数（禁止自动开浏览器，本地单机不监听 0.0.0.0）"
     )
 
     # ================================================================
@@ -116,8 +118,10 @@ class Settings(BaseSettings):
         description="云端推理服务 API Key（P2 阶段填充）"
     )
     # auto 模式触发云端切换的显存阈值（MB）
+    # 默认 4096：仅 <4GB 的显卡自动建议切云端；6GB 等主流消费卡默认本地运行
+    # （可追加 --lowvram 进一步降占用），避免阈值恰卡 6GB 把 6GB 卡误判为"显存不足"强制上云。
     vram_threshold_mb: int = Field(
-        default=6144, description="显存低于此值时建议切换云端（6GB）"
+        default=4096, description="显存低于此值（默认 4GB）时 auto 模式建议切换云端"
     )
 
     # ================================================================
