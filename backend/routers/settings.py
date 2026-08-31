@@ -133,12 +133,21 @@ _ERR_COMFYUI_INSTALL_FAILED = "11003"
 _INSTALL_LOG_TAIL_MAX = 60
 
 # 安装任务全局状态。单进程单事件循环内读写，无需加锁。
+#
+# 状态机字段与前端契约（client/src/pages/SettingsView.vue）严格对齐：
+#   - status 仅取 idle | installing | done | error
+#     前端只在 done / error 时停止轮询，其余值都会继续轮询，
+#     因此绝不能返回 success / failed 之类的别名，否则进度条永不结束。
+#   - stage 是**中文文案**，前端直接渲染给用户看；
+#     机器可读的阶段枚举放在 stage_key。
 _comfyui_install_state: dict[str, Any] = {
-    "status": "idle",              # idle | running | success | failed
+    "status": "idle",              # idle | installing | done | error
     "progress": 0,                 # 0-100
-    "stage": "",                   # precheck | clone | torch | requirements | verify | done | failed
-    "stage_label": "",             # 中文阶段名，前端可直接展示
-    "message": "",                 # 当前动作的一行描述（子进程最新输出）
+    "stage": "",                   # 中文阶段文案（前端直接展示）
+    "stage_key": "",               # precheck | clone | torch | requirements | verify | done | failed
+    "stage_label": "",             # = stage，保留别名便于其他调用方使用
+    "message": "",                 # 当前动作的一行描述（失败时 = 原因 + 处置建议）
+    "raw_message": None,           # 失败时的原始技术原因（不含建议），便于排障
     "hint": None,                  # 失败时的处置建议
     "error_code": None,
     "started_at": None,
@@ -750,16 +759,46 @@ def _set_install_state(**kwargs: Any) -> None:
     _comfyui_install_state.update(kwargs)
 
 
-def _enter_stage(stage: str, message: str = "") -> None:
-    """切换阶段：进度归位到该阶段区间下界，并同步中文标签。"""
-    lo, _hi, label = _install_stage(stage)
+def _enter_stage(stage_key: str, message: str = "") -> None:
+    """
+    切换阶段：进度归位到该阶段区间下界，并同步中文文案。
+
+    注意 stage 存中文（前端直接展示），stage_key 存机器枚举。
+    """
+    lo, _hi, label = _install_stage(stage_key)
     _set_install_state(
-        stage=stage,
+        stage_key=stage_key,
+        stage=label,
         stage_label=label,
         progress=lo,
         message=message or label,
     )
-    logger.info(f"[comfyui-install] 进入阶段 {stage}（{label}）{('- ' + message) if message else ''}")
+    logger.info(
+        f"[comfyui-install] 进入阶段 {stage_key}（{label}）"
+        f"{('- ' + message) if message else ''}"
+    )
+
+
+def _mark_install_failed(message: str, hint: str) -> None:
+    """
+    统一写入安装失败态。
+
+    关键点：前端错误分支只渲染 message（不读 hint），
+    因此这里必须把处置建议合并进 message，否则用户只看到"为什么失败"、
+    看不到"该怎么办"。原始技术原因另存 raw_message 供排障。
+    """
+    label = _install_stage("failed")[2]
+    _set_install_state(
+        status="error",
+        stage_key="failed",
+        stage=label,
+        stage_label=label,
+        message=f"{message}。{hint}" if hint else message,
+        raw_message=message,
+        hint=hint,
+        error_code=_ERR_COMFYUI_INSTALL_FAILED,
+        finished_at=datetime.now().isoformat(),
+    )
 
 
 def _append_install_log(line: str) -> None:
@@ -965,15 +1004,24 @@ async def _run_install_step(
         detail_lines = " / ".join(str(x) for x in tail[-5:])
         raise _InstallError(
             f"命令返回非 0（exit={returncode}）：{' '.join(cmd[:3])}…",
-            _diagnose_install_failure(detail_lines),
+            _diagnose_install_failure(detail_lines, stage=stage),
         )
 
 
-def _diagnose_install_failure(log_tail_text: str) -> str:
+def _diagnose_install_failure(log_tail_text: str, stage: str = "") -> str:
     """
     根据子进程输出给出根因判断（现象 → 处置），避免只抛一句"安装失败"。
+
+    未命中已知模式时按阶段给出兜底建议，保证用户永远拿到"下一步该做什么"。
     """
     t = log_tail_text.lower()
+    if any(k in t for k in ("does not appear to be a git repository",
+                            "repository not found",
+                            "could not read from remote repository")):
+        return (
+            "Git 仓库地址不可用。若配置过 COMFYUI_GIT_MIRROR，请检查地址是否填错；"
+            "清空该环境变量即可回退到官方地址重试"
+        )
     if any(k in t for k in ("could not resolve host", "failed to connect", "timed out",
                             "connection reset", "ssl", "proxy")):
         return (
@@ -994,7 +1042,19 @@ def _diagnose_install_failure(log_tail_text: str) -> str:
         )
     if "killed" in t or "memory" in t:
         return "内存不足导致依赖编译被终止。请关闭其他大内存程序后重试"
-    return f"安装未成功。最后输出：{log_tail_text[:300]}"
+
+    # 兜底：按阶段给出方向性建议，避免把裸日志丢给小白用户
+    if stage == "clone":
+        return (
+            "ComfyUI 源码下载失败。请检查网络连接，或配置 COMFYUI_GIT_MIRROR "
+            "使用国内镜像后重试"
+        )
+    if stage in ("torch", "requirements"):
+        return (
+            "依赖安装失败。请检查网络连接，或配置 PIP_INDEX_URL 使用国内镜像"
+            "（如 https://pypi.tuna.tsinghua.edu.cn/simple）后重试"
+        )
+    return f"安装未成功，请查看安装日志排查。最后输出：{log_tail_text[:200]}"
 
 
 def _comfyui_entry_exists() -> bool:
@@ -1021,7 +1081,7 @@ async def _install_comfyui() -> dict:
             "data": {
                 "status": "installing",
                 "message": (
-                    f"正在安装：{_comfyui_install_state.get('stage_label') or '准备中'}"
+                    f"正在安装：{_comfyui_install_state.get('stage') or '准备中'}"
                     f"（{_comfyui_install_state.get('progress', 0)}%）"
                 ),
                 "progress": _comfyui_install_state.get("progress", 0),
@@ -1033,9 +1093,10 @@ async def _install_comfyui() -> dict:
     # --- 幂等 2：已安装 → 秒返回 ---
     if _comfyui_entry_exists():
         _set_install_state(
-            status="success",
+            status="done",
             progress=100,
-            stage="done",
+            stage_key="done",
+            stage=_install_stage("done")[2],
             stage_label=_install_stage("done")[2],
             message="ComfyUI 已安装",
             path=str(_COMFYUI_DIR),
@@ -1090,9 +1151,10 @@ async def _install_comfyui() -> dict:
     # --- 重置状态并启动后台安装任务 ---
     mirrors = _resolve_mirrors()
     _comfyui_install_state.update({
-        "status": "running",
+        "status": "installing",
         "progress": 0,
-        "stage": "precheck",
+        "stage_key": "precheck",
+        "stage": _install_stage("precheck")[2],
         "stage_label": _install_stage("precheck")[2],
         "message": "正在检查安装环境…",
         "hint": None,
@@ -1137,15 +1199,7 @@ def _install_error_response(message: str, hint: str) -> dict:
     data.message，带上后用户能看到具体原因而不是"操作结果未知"。
     """
     logger.error(f"[comfyui-install] 失败：{message} | 建议：{hint}")
-    _set_install_state(
-        status="failed",
-        stage="failed",
-        stage_label=_install_stage("failed")[2],
-        message=message,
-        hint=hint,
-        error_code=_ERR_COMFYUI_INSTALL_FAILED,
-        finished_at=datetime.now().isoformat(),
-    )
+    _mark_install_failed(message, hint)
     return {
         "success": False,
         "error_code": _ERR_COMFYUI_INSTALL_FAILED,
@@ -1290,8 +1344,9 @@ async def _comfyui_install_worker() -> None:
             ok_msg += f"，PyTorch {torch_version}"
             ok_msg += "，CUDA 加速可用" if cuda_available else "，CUDA 不可用（将使用 CPU）"
         _set_install_state(
-            status="success",
-            stage="done",
+            status="done",
+            stage_key="done",
+            stage=_install_stage("done")[2],
             stage_label=_install_stage("done")[2],
             progress=100,
             message=ok_msg,
@@ -1303,40 +1358,18 @@ async def _comfyui_install_worker() -> None:
         logger.info(f"[comfyui-install] {ok_msg}")
 
     except _InstallError as e:
-        _set_install_state(
-            status="failed",
-            stage="failed",
-            stage_label=_install_stage("failed")[2],
-            message=e.message,
-            hint=e.hint,
-            error_code=_ERR_COMFYUI_INSTALL_FAILED,
-            finished_at=datetime.now().isoformat(),
-        )
+        _mark_install_failed(e.message, e.hint)
         _append_install_log(f"[失败] {e.message}")
         logger.error(f"[comfyui-install] 安装失败：{e.message} | 建议：{e.hint}")
     except asyncio.CancelledError:
-        _set_install_state(
-            status="failed",
-            stage="failed",
-            stage_label=_install_stage("failed")[2],
-            message="安装已取消",
-            hint="安装被中断（可能是后端重启）。请重新点击安装",
-            error_code=_ERR_COMFYUI_INSTALL_FAILED,
-            finished_at=datetime.now().isoformat(),
+        _mark_install_failed(
+            "安装已取消",
+            "安装被中断（可能是后端重启）。请重新点击安装",
         )
         logger.warning("[comfyui-install] 安装任务被取消")
         raise
     except Exception as e:
-        hint = _diagnose_install_failure(str(e))
-        _set_install_state(
-            status="failed",
-            stage="failed",
-            stage_label=_install_stage("failed")[2],
-            message=f"安装过程异常：{e}",
-            hint=hint,
-            error_code=_ERR_COMFYUI_INSTALL_FAILED,
-            finished_at=datetime.now().isoformat(),
-        )
+        _mark_install_failed(f"安装过程异常：{e}", _diagnose_install_failure(str(e)))
         _append_install_log(f"[异常] {e}")
         logger.exception(f"[comfyui-install] 安装过程未预期异常：{e}")
 
@@ -1378,10 +1411,14 @@ async def _verify_torch(launch_python: str) -> tuple[str | None, bool | None]:
     description=(
         "轮询 ComfyUI 一键安装进度。\n\n"
         "调用方式：POST /components/comfyui/action {\"action\":\"install\"} 启动安装后，"
-        "按 1.5 秒间隔轮询本接口，直到 status 为 success 或 failed。\n\n"
-        "status: idle（未开始）| running（安装中）| success（成功）| failed（失败）\n"
-        "stage:  precheck | clone | torch | requirements | verify | done | failed\n"
-        "stage_label 为中文阶段名，可直接展示给用户；log_tail 为最近安装日志，用于排障。"
+        "按 2 秒间隔轮询本接口，直到 status 为 done 或 error 即停止轮询。\n\n"
+        "status:    idle（未开始）| installing（安装中）| done（成功）| error（失败）\n"
+        "progress:  0-100\n"
+        "stage:     中文阶段文案，可直接展示（如「安装 PyTorch（CUDA 加速）」）\n"
+        "stage_key: 机器可读阶段枚举 precheck|clone|torch|requirements|verify|done|failed\n"
+        "message:   当前动作描述；失败时为「原因 + 处置建议」\n"
+        "hint:      失败时的处置建议（message 已包含，单独提供便于分开展示）\n"
+        "log_tail:  最近 60 行安装日志，用于排障"
     ),
 )
 async def get_comfyui_install_status() -> dict:
@@ -1390,8 +1427,8 @@ async def get_comfyui_install_status() -> dict:
     state["log_tail"] = list(state.get("log_tail") or [])
     state["installed"] = _comfyui_entry_exists()
     state["comfyui_path"] = str(_COMFYUI_DIR)
-    # 供前端判断是否需要继续轮询
-    state["is_running"] = state.get("status") == "running"
+    # 供前端判断是否需要继续轮询（等价于 status == "installing"）
+    state["is_running"] = state.get("status") == "installing"
     return {"success": True, "data": state}
 
 
