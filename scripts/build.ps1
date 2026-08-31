@@ -8,7 +8,7 @@
 #
 # 前置依赖:
 #   - Rust toolchain (rustc >= 1.77, MSVC toolchain)
-#   - cargo-tauri (cargo install tauri-cli@latest)
+#   - @tauri-apps/cli (npm install -g @tauri-apps/cli@latest)
 #   - Node.js >= 18 + npm
 #   - Visual Studio Build Tools 2022 (C++ 桌面开发工作负载)
 #   - Python 3.10+ (Rust 编译依赖)
@@ -70,11 +70,11 @@ try {
 }
 
 try {
-    $tauriVersion = cargo tauri --version
-    Write-Host "  ✓ cargo-tauri: $tauriVersion"
+    $tauriVersion = tauri --version
+    Write-Host "  ✓ tauri CLI: $tauriVersion"
 } catch {
-    Write-Host "  ⚠ 尝试安装 cargo-tauri..."
-    cargo install tauri-cli@latest
+    Write-Host "  ⚠ 未找到 tauri CLI，尝试通过 npm 全局安装..."
+    npm install -g @tauri-apps/cli@latest
 }
 
 # ---- 步骤 4: 清理旧构建产物 ----
@@ -87,7 +87,7 @@ Write-Host "  ✓ 清理完成"
 # ---- 步骤 5: Tauri 打包 (NSIS 安装包) ----
 Write-Host ""
 Write-Host "[5/5] Tauri 打包构建 (NSIS installer)..." -ForegroundColor Yellow
-cargo tauri build
+tauri build
 Write-Host "  ✓ Windows 打包完成"
 Write-Host ""
 Write-Host "  📦 输出文件:" -ForegroundColor Green

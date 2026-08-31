@@ -10,7 +10,7 @@
 #
 # 前置依赖:
 #   - Rust toolchain (rustc >= 1.77)
-#   - cargo-tauri (cargo install tauri-cli@latest)
+#   - @tauri-apps/cli (npm install -g @tauri-apps/cli@latest)
 #   - Node.js >= 18 + npm
 #   - Xcode Command Line Tools (macOS)
 #   - 签名证书已安装 (Keychain Access)
@@ -60,11 +60,11 @@ fi
 RUST_VERSION=$(rustc --version)
 echo "  ✓ Rust: $RUST_VERSION"
 
-if ! command -v cargo-tauri &> /dev/null && ! cargo tauri --version &> /dev/null; then
-    echo "  ⚠ 未找到 cargo-tauri，尝试安装..."
-    cargo install tauri-cli@latest
+if ! command -v tauri &> /dev/null; then
+    echo "  ⚠ 未找到 tauri CLI，尝试通过 npm 全局安装..."
+    npm install -g @tauri-apps/cli@latest
 fi
-echo "  ✓ cargo-tauri 就绪"
+echo "  ✓ tauri CLI 就绪"
 
 # ---- 步骤 4: 清理旧构建产物 ----
 echo ""
@@ -83,8 +83,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "  目标: universal-apple-darwin (Intel + Apple Silicon)"
     # universal-apple-darwin 需要交叉编译，生产环境使用
     # 开发环境先用本机架构
-    # cargo tauri build --target universal-apple-darwin
-    cargo tauri build
+    # npx tauri build --target universal-apple-darwin
+    tauri build
     echo "  ✓ macOS 打包完成"
     echo ""
     echo "  📦 输出文件:"
@@ -92,7 +92,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "    target/release/bundle/macos/NexusVideo.app"
 else
     echo "  平台: Linux"
-    cargo tauri build
+    tauri build
     echo "  ✓ Linux 打包完成"
     echo ""
     echo "  📦 输出文件:"

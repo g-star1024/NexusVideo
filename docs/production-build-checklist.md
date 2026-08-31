@@ -31,9 +31,9 @@ node --version
 rustc --version
 # 预期：rustc 1.70.x 或更高
 
-# Tauri CLI
-cargo tauri --version
-# 预期：cargo-tauri 2.x.x
+# Tauri CLI（@tauri-apps/cli 预编译包，无需 cargo install）
+tauri --version
+# 预期：tauri 2.x.x
 
 # npm / pnpm
 npm --version
@@ -47,7 +47,7 @@ git --version
 |--------|------|---------|------|
 | [ ] Node.js | `node --version` | ≥ 18 | ☐ |
 | [ ] Rust | `rustc --version` | ≥ 1.70 | ☐ |
-| [ ] Tauri CLI | `cargo tauri --version` | ≥ 2.0 | ☐ |
+| [ ] Tauri CLI | `tauri --version` | ≥ 2.0 | ☐ |
 | [ ] npm | `npm --version` | ≥ 9 | ☐ |
 | [ ] Git | `git --version` | ≥ 2.40 | ☐ |
 
@@ -480,7 +480,7 @@ curl -X PUT https://releases.nexusvideo.com/api/update \
 
 ```bash
 # ============ 环境检查 ============
-node --version && rustc --version && cargo tauri --version
+node --version && rustc --version && tauri --version
 
 # ============ 构建 ============
 cd client && npm ci && npm run tauri build

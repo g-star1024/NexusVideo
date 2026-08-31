@@ -204,10 +204,6 @@ jobs:
         run: cd client && npm run build
         timeout-minutes: 10
 
-      - name: 安装 Tauri CLI
-        shell: bash
-        run: cargo install tauri-cli --version "^2.0"
-
       - name: 安装 Python（构建后端 venv 用）
         uses: actions/setup-python@v5
         with:
@@ -246,7 +242,7 @@ jobs:
           echo "[INFO] 开始全新构建..."
           BUILD_LOG=tauri-build.log
           set +e
-          cargo tauri build >"$BUILD_LOG" 2>&1
+          npx tauri build >"$BUILD_LOG" 2>&1
           RC=$?
           set -e
           if [ "$RC" -ne 0 ]; then
@@ -357,9 +353,6 @@ jobs:
       - name: 构建前端
         run: cd client && npm run build
         timeout-minutes: 10
-
-      - name: 安装 Tauri CLI
-        run: cargo install tauri-cli --version "^2.0"
 
       - name: 构建后端 Python 环境 (venv + backend)
         # macOS 同样要把 python_env / backend 打进包。产物位置：<repo>/resources/。
@@ -478,7 +471,7 @@ jobs:
           rustup target add ${{ steps.arch_target.outputs.cargo_target }}
           BUILD_LOG=tauri-build.log
           set +e
-          cargo tauri build --target ${{ steps.arch_target.outputs.cargo_target }} >"$BUILD_LOG" 2>&1
+          npx tauri build --target ${{ steps.arch_target.outputs.cargo_target }} >"$BUILD_LOG" 2>&1
           RC=$?
           set -e
           if [ "$RC" -ne 0 ]; then

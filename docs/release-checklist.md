@@ -83,7 +83,7 @@
 ### 2.1 开发环境检查
 
 - [ ] Rust toolchain ≥ 1.77 (`rustc --version`)
-- [ ] cargo-tauri 已安装 (`cargo tauri --version`)
+- [ ] @tauri-apps/cli 已安装（npm 预编译包；`npx tauri --version` 或 `tauri --version`）
 - [ ] Node.js ≥ 18 (`node --version`)
 - [ ] npm 可用 (`npm --version`)
 - [ ] macOS: Xcode Command Line Tools (`xcode-select --install`)
@@ -107,12 +107,12 @@ cd client && npm ci && npm run build
 cd client/src-tauri && cargo build --release
 
 # 完整 Tauri 构建
-cd client/src-tauri && cargo tauri build
+cd client/src-tauri && npx tauri build
 ```
 
 - [ ] 前端 `npm run build` 无错误
 - [ ] Rust `cargo build --release` 无 warning（或已记录）
-- [ ] `cargo tauri build` 成功完成
+- [ ] `npx tauri build` 成功完成
 
 ---
 
