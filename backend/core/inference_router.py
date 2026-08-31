@@ -26,6 +26,7 @@ from config import settings
 from models.schemas import InferenceMode
 
 import httpx
+import httpcore
 
 
 # ================================================================
@@ -119,15 +120,16 @@ class LocalBackend(InferenceBackend):
         from exceptions import ComfyUINotRunningError
         try:
             result = await comfyui_client.submit_prompt(workflow, str(uuid.uuid4()))
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.ConnectTimeout,
+                httpcore.ConnectError, OSError) as e:
+            logger.warning(
+                f"ComfyUI 连接失败，异常类型={type(e).__name__}，消息={e}"
+            )
             raise ComfyUINotRunningError(detail={
                 "comfyui_url": settings.comfyui_base_url,
-                "hint": "本地 ComfyUI 服务未启动，请检查模型是否下载完成",
-            })
-        except httpx.ConnectTimeout:
-            raise ComfyUINotRunningError(detail={
-                "comfyui_url": settings.comfyui_base_url,
-                "hint": "本地 ComfyUI 服务未响应，连接超时",
+                "exception_type": type(e).__name__,
+                "exception_message": str(e),
+                "hint": "本地 ComfyUI 服务未启动或无法连接，请检查服务状态",
             })
         return result["prompt_id"]
 

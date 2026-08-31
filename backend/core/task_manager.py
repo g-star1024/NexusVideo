@@ -351,7 +351,7 @@ class TaskManager:
             except Exception:
                 pass
 
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpcore.ConnectError, OSError):
             record.status = TaskStatus.FAILED
             record.error = "ComfyUI 连接失败，推理引擎可能已崩溃"
             record.error_code = "11001"
