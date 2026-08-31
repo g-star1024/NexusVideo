@@ -28,6 +28,12 @@ export interface ComponentStatusItem {
   action?: ComponentAction;   // 可执行操作
   size?: string;              // 文件大小，如 "12.5GB"
   progress?: number;          // 下载/安装进度 0-100
+  // ---- 增量字段（后端 commit a704de7）：显存感知模型下载 ----
+  min_vram_mb?: number;                            // 模型最低显存需求(MB)
+  recommended?: boolean;                           // 是否默认推荐轻量模型
+  group?: 'recommended' | 'advanced';              // 下载列表分组键（推荐 / 高级不推荐）
+  vram_warning?: boolean;                          // 本机显存不满足该模型 / 无 NVIDIA 显卡时为 true
+  vram_note?: string | null;                       // 中文提示，如"需 ≥16.0GB 显存，当前设备仅 6.0GB…"
 }
 
 export interface SystemInfo {
@@ -111,6 +117,12 @@ export function enrichComponent(item: {
   action?: ComponentAction;
   size?: string;
   progress?: number;
+  // 增量字段
+  min_vram_mb?: number;
+  recommended?: boolean;
+  group?: 'recommended' | 'advanced';
+  vram_warning?: boolean;
+  vram_note?: string | null;
 }): ComponentStatusItem {
   const label = COMPONENT_LABELS[item.id];
   return {
@@ -122,6 +134,12 @@ export function enrichComponent(item: {
     action: item.action,
     size: item.size,
     progress: item.progress,
+    // 透传增量字段（保持纯增量，不破坏既有字段）
+    min_vram_mb: item.min_vram_mb,
+    recommended: item.recommended,
+    group: item.group,
+    vram_warning: item.vram_warning,
+    vram_note: item.vram_note ?? null,
   };
 }
 
@@ -173,7 +191,7 @@ export async function getComponents(): Promise<ComponentStatusItem[]> {
   );
   const items = raw?.data?.components || [];
   return items.map((item) => {
-    // 后端用 action_button（中文），前端用 action（枚举）
+    // 后端用 action_button（中文），前端用 action（枚举）—— 后端不返回 action 字段
     const btn = item.action_button as string | undefined;
     const action: ComponentAction | undefined = btn ? ACTION_BUTTON_MAP[btn] : undefined;
     return enrichComponent({
@@ -183,7 +201,13 @@ export async function getComponents(): Promise<ComponentStatusItem[]> {
       detail: item.detail as string | undefined,
       action,
       size: item.size_gb ? `${item.size_gb}GB` : undefined,
-    }) as unknown as ComponentStatusItem;
+      // 增量字段（commit a704de7）：显存感知
+      min_vram_mb: item.min_vram_mb as number | undefined,
+      recommended: item.recommended as boolean | undefined,
+      group: item.group as 'recommended' | 'advanced' | undefined,
+      vram_warning: item.vram_warning as boolean | undefined,
+      vram_note: (item.vram_note as string | null | undefined) ?? null,
+    });
   });
 }
 

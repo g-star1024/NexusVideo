@@ -60,6 +60,20 @@ const issueCount = computed(() =>
   ).length
 );
 
+// 显存感知：带 group 的组件视为「模型下载项」，单独成卡片区；其余留在通用状态列表
+const modelItems = computed(() =>
+  components.value.filter((c) => c.group !== undefined)
+);
+const otherComponents = computed(() =>
+  components.value.filter((c) => c.group === undefined)
+);
+const recommendedModels = computed(() =>
+  modelItems.value.filter((m) => m.group === 'recommended')
+);
+const advancedModels = computed(() =>
+  modelItems.value.filter((m) => m.group === 'advanced')
+);
+
 // ---------- 页面进入时拉取 ----------
 async function fetchAll() {
   loading.value = true;
@@ -244,6 +258,12 @@ function levelClass(l: ErrorLog['level']) {
   return l === 'ERROR' ? 'log-row--error' : 'log-row--warn';
 }
 
+// 显存需求：MB → GB（保留 1 位小数）
+function vramGb(mb?: number): string {
+  if (!mb || mb <= 0) return '0.0';
+  return (mb / 1024).toFixed(1);
+}
+
 onMounted(fetchAll);
 onUnmounted(stopInstallPolling);
 </script>
@@ -340,14 +360,14 @@ onUnmounted(stopInstallPolling);
           <div class="section-header">
             <h3 class="section-title">🧩 组件状态</h3>
             <span class="section-hint">
-              {{ components.length }} 个组件
+              {{ otherComponents.length }} 个组件
               <span v-if="hasIssue" class="section-hint--warn">（{{ issueCount }} 个需关注）</span>
             </span>
           </div>
 
           <div class="components-list">
             <div
-              v-for="c in components"
+              v-for="c in otherComponents"
               :key="c.id"
               class="component-row"
               :class="statusRowClass(c.status)"
@@ -510,9 +530,172 @@ onUnmounted(stopInstallPolling);
               </div>
             </div>
 
-            <div v-if="components.length === 0" class="empty-state">
+            <div v-if="otherComponents.length === 0" class="empty-state">
               <span class="empty-state__icon">🧩</span>
               <span class="empty-state__text">暂无组件数据，请刷新</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====== 模型下载列表（显存感知） ====== -->
+        <section class="models-section" v-if="modelItems.length > 0">
+          <div class="section-header">
+            <h3 class="section-title">📦 模型下载列表</h3>
+            <span class="section-hint">
+              按显存需求分组
+              <span v-if="system" class="section-hint--vram">· 当前显存 {{ system.vram }}</span>
+            </span>
+          </div>
+
+          <div class="models-cols">
+            <!-- 推荐栏 -->
+            <div class="models-col">
+              <div class="models-col__head models-col__head--recommended">
+                <span class="models-col__badge">✓ 推荐</span>
+                <span class="models-col__sub">轻量模型，本机可流畅运行</span>
+              </div>
+              <div class="models-col__body">
+                <article
+                  v-for="m in recommendedModels"
+                  :key="m.id"
+                  class="model-card"
+                  :class="{ 'model-card--warn': m.vram_warning }"
+                >
+                  <span v-if="m.recommended" class="model-card__rec-badge">✓ 推荐</span>
+
+                  <div class="model-card__head">
+                    <span class="model-card__name">{{ m.name || m.id }}</span>
+                    <span class="model-card__ver" v-if="m.version">v{{ m.version }}</span>
+                    <span class="model-card__size" v-if="m.size">{{ m.size }}</span>
+                  </div>
+
+                  <div class="model-card__vram">
+                    <span class="model-card__vram-icon">🧠</span>
+                    需 {{ vramGb(m.min_vram_mb) }} GB 显存
+                  </div>
+
+                  <!-- 下载进度条 -->
+                  <div
+                    v-if="m.progress !== undefined && m.progress >= 0 && m.action === 'download'"
+                    class="model-card__progress"
+                  >
+                    <div class="progress-bar">
+                      <div class="progress-bar__fill" :style="{ width: `${m.progress}%` }" />
+                    </div>
+                    <span class="progress-bar__text">{{ m.progress }}%</span>
+                  </div>
+
+                  <!-- 操作区（复用 .btn-action / handleAction，不破坏既有下载逻辑） -->
+                  <div class="model-card__action">
+                    <button
+                      v-if="m.action === 'download' && m.status !== 'ok'"
+                      class="btn-action btn-action--danger"
+                      :class="{ 'btn-action--loading': actionInProgress[m.id] }"
+                      :disabled="m.vram_warning || actionInProgress[m.id]"
+                      @click="handleAction(m)"
+                    >
+                      <svg
+                        v-if="actionInProgress[m.id]"
+                        width="14" height="14" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round"
+                        class="spin"
+                      >
+                        <circle cx="12" cy="12" r="9" stroke-opacity="0.3"/>
+                        <path d="M12 3a9 9 0 0 1 9 9"/>
+                      </svg>
+                      <span>{{ actionInProgress[m.id] ? '下载中…' : (m.vram_warning ? '显存不足' : '下载') }}</span>
+                    </button>
+                    <span v-if="m.status === 'ok' && !m.action" class="btn-action btn-action--ok-static">
+                      ✅ 就绪
+                    </span>
+                    <span v-if="m.status === 'checking'" class="btn-action btn-action--checking">
+                      ⏳ 检测中…
+                    </span>
+                  </div>
+
+                  <!-- 显存警告说明（红字） -->
+                  <p v-if="m.vram_warning && m.vram_note" class="model-card__note">
+                    ⚠️ {{ m.vram_note }}
+                  </p>
+                </article>
+                <div v-if="recommendedModels.length === 0" class="models-col__empty">暂无推荐模型</div>
+              </div>
+            </div>
+
+            <!-- 高级不推荐栏 -->
+            <div class="models-col">
+              <div class="models-col__head models-col__head--advanced">
+                <span class="models-col__badge">⚠ 高级不推荐</span>
+                <span class="models-col__sub">高显存需求，可能爆显存</span>
+              </div>
+              <div class="models-col__body">
+                <article
+                  v-for="m in advancedModels"
+                  :key="m.id"
+                  class="model-card"
+                  :class="{ 'model-card--warn': m.vram_warning }"
+                >
+                  <span v-if="m.recommended" class="model-card__rec-badge">✓ 推荐</span>
+
+                  <div class="model-card__head">
+                    <span class="model-card__name">{{ m.name || m.id }}</span>
+                    <span class="model-card__ver" v-if="m.version">v{{ m.version }}</span>
+                    <span class="model-card__size" v-if="m.size">{{ m.size }}</span>
+                  </div>
+
+                  <div class="model-card__vram">
+                    <span class="model-card__vram-icon">🧠</span>
+                    需 {{ vramGb(m.min_vram_mb) }} GB 显存
+                  </div>
+
+                  <!-- 下载进度条 -->
+                  <div
+                    v-if="m.progress !== undefined && m.progress >= 0 && m.action === 'download'"
+                    class="model-card__progress"
+                  >
+                    <div class="progress-bar">
+                      <div class="progress-bar__fill" :style="{ width: `${m.progress}%` }" />
+                    </div>
+                    <span class="progress-bar__text">{{ m.progress }}%</span>
+                  </div>
+
+                  <!-- 操作区 -->
+                  <div class="model-card__action">
+                    <button
+                      v-if="m.action === 'download' && m.status !== 'ok'"
+                      class="btn-action btn-action--danger"
+                      :class="{ 'btn-action--loading': actionInProgress[m.id] }"
+                      :disabled="m.vram_warning || actionInProgress[m.id]"
+                      @click="handleAction(m)"
+                    >
+                      <svg
+                        v-if="actionInProgress[m.id]"
+                        width="14" height="14" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round"
+                        class="spin"
+                      >
+                        <circle cx="12" cy="12" r="9" stroke-opacity="0.3"/>
+                        <path d="M12 3a9 9 0 0 1 9 9"/>
+                      </svg>
+                      <span>{{ actionInProgress[m.id] ? '下载中…' : (m.vram_warning ? '显存不足' : '下载') }}</span>
+                    </button>
+                    <span v-if="m.status === 'ok' && !m.action" class="btn-action btn-action--ok-static">
+                      ✅ 就绪
+                    </span>
+                    <span v-if="m.status === 'checking'" class="btn-action btn-action--checking">
+                      ⏳ 检测中…
+                    </span>
+                  </div>
+
+                  <!-- 显存警告说明（红字） -->
+                  <p v-if="m.vram_warning && m.vram_note" class="model-card__note">
+                    ⚠️ {{ m.vram_note }}
+                  </p>
+                </article>
+                <div v-if="advancedModels.length === 0" class="models-col__empty">暂无高级模型</div>
+              </div>
             </div>
           </div>
         </section>
@@ -1027,5 +1210,158 @@ onUnmounted(stopInstallPolling);
   .system-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+  .models-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ====== 模型下载列表（显存感知） ====== */
+.models-section {
+  background: var(--glass-1);
+  -webkit-backdrop-filter: var(--glass-blur-1);
+  backdrop-filter: var(--glass-blur-1);
+  border: var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+}
+.section-hint--vram {
+  color: var(--text-tertiary);
+}
+.models-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.models-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.models-col__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: var(--divider);
+}
+.models-col__badge {
+  font-size: var(--text-body-sm);
+  font-weight: var(--font-weight-semibold);
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+}
+.models-col__head--recommended .models-col__badge {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid rgba(61, 214, 140, 0.3);
+}
+.models-col__head--advanced .models-col__badge {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid rgba(255, 185, 56, 0.3);
+}
+.models-col__sub {
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+}
+.models-col__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.models-col__empty {
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+  padding: 12px;
+  text-align: center;
+  border: var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.model-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--glass-1);
+  border: var(--border-subtle);
+  transition: all 0.15s ease;
+}
+.model-card:hover {
+  border-color: var(--border-strong);
+  background: var(--hover-overlay);
+}
+/* 显存不足的橙色/黄色警告边框 + 警告底 */
+.model-card--warn {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.model-card--warn:hover {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.model-card__rec-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid rgba(61, 214, 140, 0.3);
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+}
+.model-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-right: 60px; /* 给右上角徽标留位 */
+}
+.model-card__name {
+  font-size: var(--text-body);
+  color: var(--text-primary);
+  font-weight: var(--font-weight-medium);
+}
+.model-card__ver {
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  background: var(--glass-1);
+  border-radius: 4px;
+}
+.model-card__size {
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+}
+.model-card__vram {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+}
+.model-card__vram-icon {
+  font-size: 13px;
+}
+.model-card__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.model-card__action {
+  display: flex;
+  justify-content: flex-start;
+}
+.model-card__note {
+  margin: 0;
+  font-size: var(--text-caption);
+  color: var(--error);
+  line-height: 1.5;
 }
 </style>
