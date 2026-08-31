@@ -39,6 +39,7 @@ from loguru import logger
 
 from config import settings
 from exceptions import ErrorCode
+from core.vram import _get_vram_total_mb, _has_nvidia_gpu
 
 router = APIRouter(prefix="/api/v1/settings", tags=["设置中心"])
 
@@ -54,11 +55,25 @@ _PYTHON_ENV_DIR = _PROJECT_ROOT / "resources" / "python_env"
 _MODELS_DIR = _COMFYUI_DIR / "models" if _COMFYUI_DIR.exists() else _PROJECT_ROOT / "models"
 
 # 已知模型配置（用于检测与下载提示）
+#
+# 新增字段（Task #5：模型列表显存过滤 + lowvram 自动策略）：
+#   min_vram_mb: 运行该模型所需的最低显存（MB）。用于按本机实际显存过滤/标注。
+#   recommended: 是否为「默认推荐」的轻量模型（前端据此决定默认展示分组）。
+#                True 的模型（Wan2.1 T2V 1.3B / AnimateDiff）作为默认展示项；
+#                False 的较重模型（CogVideoX-5b / Wan2.1 I2V 14B）归入「高级/不推荐」。
+#
+# 数值依据（fp16 推理经验值）：
+#   - Wan2.1-T2V-1.3B：约 6GB 可跑（配合 --lowvram 更低）
+#   - AnimateDiff（SD1.5 + 运动模块）：约 4GB
+#   - CogVideoX-5b：约 12GB
+#   - Wan2.1-I2V-14B：约 16GB
 _MODEL_REGISTRY: dict[str, dict[str, Any]] = {
     "model_cogvideox": {
         "name": "CogVideoX 模型（文生视频）",
         "icon": "model",
         "size_gb": 12.5,
+        "min_vram_mb": 12288,
+        "recommended": False,
         "patterns": ["cogvideox*.safetensors", "cogvideox*.ckpt"],
         "download_url": "https://huggingface.co/THUDM/CogVideoX-5b",
         "detail": "文生视频 CogVideoX-5b，约 12.5GB",
@@ -67,6 +82,8 @@ _MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "name": "Wan2.1 T2V 模型（文生视频）",
         "icon": "model",
         "size_gb": 5.6,
+        "min_vram_mb": 6144,
+        "recommended": True,
         "patterns": ["wan2.1*t2v*.safetensors", "wan2.1*t2v*.fp16.safetensors"],
         "download_url": "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B",
         "detail": "文生视频 Wan2.1 T2V 1.3B fp16，约 5.6GB（主力模型）",
@@ -75,6 +92,8 @@ _MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "name": "Wan2.1 I2V 模型（图生视频）",
         "icon": "model",
         "size_gb": 5.6,
+        "min_vram_mb": 16384,
+        "recommended": False,
         "patterns": ["wan2.1*i2v*.safetensors", "wan2.1*i2v*.fp16.safetensors"],
         "download_url": "https://huggingface.co/Wan-AI/Wan2.1-I2V-14B",
         "detail": "图生视频 Wan2.1 I2V 14B，约 28GB",
@@ -83,11 +102,74 @@ _MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "name": "AnimateDiff 模型（保底）",
         "icon": "model",
         "size_gb": 3.5,
+        "min_vram_mb": 4096,
+        "recommended": True,
         "patterns": ["animatediff*.safetensors", "mm_sd*.safetensors"],
         "download_url": "https://huggingface.co/guoyww/animatediff",
         "detail": "AnimateDiff 动画模型，约 3.5GB（显存不足时的保底方案）",
     },
 }
+
+
+# ================================================================
+# 模型显存过滤 / 标注辅助函数
+# ================================================================
+def _model_group(reg: dict[str, Any]) -> str:
+    """模型分组：recommended=推荐（默认展示），advanced=高级/不推荐。"""
+    return "recommended" if reg.get("recommended", False) else "advanced"
+
+
+def _attach_vram_warning(comp: dict[str, Any], reg: dict[str, Any]) -> None:
+    """
+    根据本机实际显存给模型组件附加显存标注（原地修改 comp）。
+
+    - vram_warning=True 表示本机显存不满足该模型的最低要求；
+    - 此时 vram_note 给出中文提示，且 group 强制落到 advanced、recommended 置 False；
+    - 无 NVIDIA 显卡（nvidia-smi 不可用）时，所有需要显存的模型都标 warning。
+    """
+    min_vram = reg.get("min_vram_mb", 0)
+    vram = _get_vram_total_mb()
+    if vram is None:
+        # 无可用 GPU：GPU 视频生成不可用，需要显存的模型一律标 warning
+        comp["vram_warning"] = bool(min_vram)
+        comp["vram_note"] = (
+            "未检测到 NVIDIA 显卡，无法运行 GPU 视频生成"
+            if min_vram else None
+        )
+        if min_vram:
+            comp["group"] = "advanced"
+            comp["recommended"] = False
+        return
+    if min_vram and vram < min_vram:
+        comp["vram_warning"] = True
+        need_gb = round(min_vram / 1024, 1)
+        cur_gb = round(vram / 1024, 1)
+        comp["vram_note"] = (
+            f"需 ≥{need_gb}GB 显存，当前设备仅 {cur_gb}GB，运行可能爆显存"
+        )
+        comp["group"] = "advanced"
+        comp["recommended"] = False
+    else:
+        comp["vram_warning"] = False
+        comp["vram_note"] = None
+
+
+def _build_model_comp_base(model_id: str, reg: dict[str, Any]) -> dict[str, Any]:
+    """构造模型组件的基础字段（含显存过滤标注），供各分支复用。"""
+    comp = {
+        "id": model_id,
+        "name": reg.get("name", model_id),
+        "icon": reg.get("icon", "model"),
+        "size_gb": reg.get("size_gb", 0),
+        "min_vram_mb": reg.get("min_vram_mb", 0),
+        "recommended": reg.get("recommended", False),
+        "group": _model_group(reg),
+        "download_url": reg.get("download_url"),
+        "vram_warning": False,
+        "vram_note": None,
+    }
+    _attach_vram_warning(comp, reg)
+    return comp
 
 
 # ================================================================
@@ -449,7 +531,7 @@ def _detect_ffmpeg() -> dict[str, Any]:
 
 
 def _detect_model(model_id: str) -> dict[str, Any]:
-    """检测指定模型文件是否存在。"""
+    """检测指定模型文件是否存在，并附带显存过滤标注。"""
     reg = _MODEL_REGISTRY.get(model_id)
     if not reg:
         return {
@@ -460,11 +542,12 @@ def _detect_model(model_id: str) -> dict[str, Any]:
             "detail": f"未知的模型 ID：{model_id}",
         }
 
+    # 基础字段（含 min_vram_mb / recommended / group / vram_warning / vram_note）
+    comp = _build_model_comp_base(model_id, reg)
+
     if not _MODELS_DIR.exists():
         return {
-            "id": model_id,
-            "name": reg["name"],
-            "icon": reg["icon"],
+            **comp,
             "status": "missing",
             "version": None,
             "size_gb": reg["size_gb"],
@@ -483,9 +566,7 @@ def _detect_model(model_id: str) -> dict[str, Any]:
         file_path = found_files[0]
         size_gb = round(file_path.stat().st_size / (1024 ** 3), 2)
         return {
-            "id": model_id,
-            "name": reg["name"],
-            "icon": reg["icon"],
+            **comp,
             "status": "ok",
             "version": file_path.name,
             "size_gb": size_gb,
@@ -495,9 +576,7 @@ def _detect_model(model_id: str) -> dict[str, Any]:
         }
     else:
         return {
-            "id": model_id,
-            "name": reg["name"],
-            "icon": reg["icon"],
+            **comp,
             "status": "missing",
             "version": None,
             "size_gb": reg["size_gb"],
@@ -591,16 +670,15 @@ async def _safe_detect_model(model_id: str) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"模型 {model_id} 检测异常：{e}")
         reg = _MODEL_REGISTRY.get(model_id, {})
-        return {
-            "id": model_id,
-            "name": reg.get("name", model_id),
-            "icon": "model",
+        comp = _build_model_comp_base(model_id, reg)
+        comp.update({
             "status": "error",
             "version": None,
             "detail": f"模型检测异常：{e}",
             "action_hint": "检测出错，建议检查模型目录权限",
             "action_button": "修复",
-        }
+        })
+        return comp
 
 
 def _clean_component(c: dict) -> dict:
@@ -872,11 +950,6 @@ def _resolve_launch_python() -> tuple[str, str | None]:
             f"而非后端自身解释器 {sys.executable}"
         )
     return resolved, warning
-
-
-def _has_nvidia_gpu() -> bool:
-    """轻量判断是否存在 NVIDIA 显卡（只看 nvidia-smi 是否可执行）。"""
-    return shutil.which("nvidia-smi") is not None
 
 
 def _resolve_mirrors() -> dict[str, str | None]:
@@ -1457,6 +1530,8 @@ async def _handle_model_download(model_id: str) -> dict:
             "model_id": model_id,
             "model_name": reg["name"],
             "size_gb": reg["size_gb"],
+            "min_vram_mb": reg.get("min_vram_mb", 0),
+            "recommended": reg.get("recommended", False),
             "download_url": reg["download_url"],
             "target_dir": str(_MODELS_DIR),
             "message": f"模型 {reg['name']} 下载已加入队列，请等待下载完成后重启 ComfyUI",

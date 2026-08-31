@@ -125,6 +125,23 @@ class ComfyUIProcessManager:
             "--port", str(port),
         ]
         cmd.extend(settings.comfyui_extra_args)
+
+        # 按本机实际显存追加 --lowvram / --medvram（Task #5 自动策略）。
+        # 阈值（显存总量 MB）：
+        #   ≤ 8192 (8GB)         → --lowvram   （最小显存占用，速度最慢但最稳）
+        #   8193 – 12288 (8–12GB) → --medvram   （显存/速度折中）
+        #   > 12288 (12GB)       → 不追加        （全量加载，速度最快）
+        # 注意：不写死到 config.comfyui_extra_args（会拖累 12GB+ 卡），
+        #       而是运行时按检测到的实际显存拼装。无 GPU / 探测失败则不追加。
+        from core.vram import _get_vram_total_mb
+        _vram_mb = _get_vram_total_mb()
+        if _vram_mb is not None:
+            if _vram_mb <= 8192:
+                cmd.append("--lowvram")
+            elif _vram_mb <= 12288:
+                cmd.append("--medvram")
+            # > 12288 不追加，保持默认全量加载
+
         return cmd
 
     # ================================================================
