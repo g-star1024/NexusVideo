@@ -250,6 +250,46 @@ export async function getErrorLogs(): Promise<ErrorLog[]> {
   }));
 }
 
+// ---------- ComfyUI 一键拉取（专用安装流程） ----------
+
+export interface ComfyUIInstallStatus {
+  status: string;   // cloning | installing | done | error | idle
+  progress: number; // 0-100
+  stage: string;    // 阶段中文文案，如 "正在克隆仓库…"
+  message: string;  // 附加信息 / 错误信息
+}
+
+/**
+ * 一键拉取 ComfyUI（触发安装）
+ * 后端返回：{"success": true, "data": {"status": "installing"}}
+ */
+export async function installComfyUI(): Promise<{ status: string }> {
+  const raw = await requestPost<{ data?: { status?: string } }>(
+    '/api/v1/settings/components/comfyui/action',
+    { action: 'install' },
+  );
+  return { status: raw.data?.status ?? 'unknown' };
+}
+
+/**
+ * 查询 ComfyUI 安装状态（轮询用）
+ * 后端返回：{"success": true, "data": {"status": "...", "progress": 0-100, "stage": "...", "message": "..."}}
+ * 注意：实际 GET 封装名为 request（见本文件顶部），非 requestGet。
+ */
+export async function getComfyUIInstallStatus(): Promise<ComfyUIInstallStatus> {
+  const raw = await request<{ data?: Partial<ComfyUIInstallStatus> }>(
+    '/api/v1/settings/components/comfyui/install-status',
+  );
+  return raw.data
+    ? {
+        status: raw.data.status ?? 'idle',
+        progress: raw.data.progress ?? 0,
+        stage: raw.data.stage ?? '',
+        message: raw.data.message ?? '',
+      }
+    : { status: 'idle', progress: 0, stage: '', message: '' };
+}
+
 /**
  * 一键刷新全部状态（组件 + 系统）
  */
