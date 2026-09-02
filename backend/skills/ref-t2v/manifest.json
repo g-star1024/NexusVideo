@@ -52,7 +52,7 @@
   },
   "output": {
     "type": "video",
-    "node": "9",
+    "node": "10",
     "format": "video/h264-mp4"
   },
   "enabled": true
