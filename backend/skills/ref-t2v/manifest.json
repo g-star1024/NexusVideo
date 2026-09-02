@@ -35,7 +35,7 @@
   "default_params": {
     "width": 832,
     "height": 480,
-    "frames": 81,
+    "frames": 17,
     "steps": 30,
     "cfg": 6.0,
     "negative_prompt": "text, watermark, low quality, blurry, deformed, distorted, bad anatomy, extra limbs, lowres, worst quality, jpeg artifacts, duplicate"
@@ -52,8 +52,8 @@
   },
   "output": {
     "type": "video",
-    "node": "10",
-    "format": "video/mp4"
+    "node": "9",
+    "format": "video/h264-mp4"
   },
   "enabled": true
 }

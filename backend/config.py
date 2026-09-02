@@ -9,7 +9,7 @@ NexusVideo Backend - 配置管理
 
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 
 class Settings(BaseSettings):
@@ -53,6 +53,12 @@ class Settings(BaseSettings):
         # 本地单机无需 --listen（监听 0.0.0.0 会触发防火墙弹窗，且暴露端口）。
         default_factory=lambda: [
             "--disable-auto-launch",
+            # 生成产物统一写到 D: 暂存区，避免占用 C: 系统盘（NexusVideo 硬性要求：禁止往系统盘落盘）
+            "--output-directory", "D:/nexusvideo_staging/output",
+            # 强制关闭 pinned memory + 关闭模型缓存，避免 6GB 显存提交内存不足触发 os error 1455 OOM 崩溃
+            # （本机 launch 时提交内存 ≥12GB，process_manager 自动逻辑不会加这两个 flag，故在此写死）
+            "--disable-pinned-memory",
+            "--cache-none",
         ],
         description="ComfyUI 启动额外参数（禁止自动开浏览器，本地单机不监听 0.0.0.0）"
     )
@@ -137,10 +143,63 @@ class Settings(BaseSettings):
     # ================================================================
     log_level: str = Field(default="INFO", description="日志级别")
 
+    # ================================================================
+    # 下载镜像源（一键拉取 ComfyUI / 安装依赖时使用）
+    # ================================================================
+    # 背景（真实踩坑）：文档和用户习惯都是直接写 PIP_INDEX_URL / TORCH_INDEX_URL /
+    # COMFYUI_GIT_MIRROR 这类**不带前缀**的变量，而本类 env_prefix="NEXUS_" +
+    # pydantic-settings 默认 extra="forbid"，结果是"文档让用户配镜像源，用户一配
+    # 后端就崩溃起不来"（extra_forbidden）。
+    #
+    # 处置：显式声明字段，并用 AliasChoices 同时接受带前缀与不带前缀两种写法，
+    # 顺序即优先级（NEXUS_ 前缀优先）。再配合下面的 extra="ignore" 兜底，
+    # 保证 .env 里出现任何未声明的变量都不会再让后端崩溃。
+    pip_index_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_PIP_INDEX_URL", "PIP_INDEX_URL"),
+        description="pip 镜像源（如 https://pypi.tuna.tsinghua.edu.cn/simple）",
+    )
+    torch_index_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "NEXUS_TORCH_INDEX_URL", "TORCH_INDEX_URL", "TORCH_CUDA_INDEX_URL"
+        ),
+        description="PyTorch 轮子索引（如 https://download.pytorch.org/whl/cu124 或国内镜像）",
+    )
+    comfyui_git_mirror: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_COMFYUI_GIT_MIRROR", "COMFYUI_GIT_MIRROR"),
+        description="ComfyUI 仓库镜像地址（Gitee 等国内镜像）",
+    )
+    comfyui_tarball_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_COMFYUI_TARBALL_URL", "COMFYUI_TARBALL_URL"),
+        description="ComfyUI 源码压缩包地址（本机无 Git / git 协议被屏蔽时的回退下载源）",
+    )
+    comfyui_source_tag: str | None = Field(
+        default="master",
+        validation_alias=AliasChoices("NEXUS_COMFYUI_SOURCE_TAG", "COMFYUI_SOURCE_TAG"),
+        description="ComfyUI 源码版本（tag/分支/commit；默认 master）。锁定它可保证一键拉取结果可复现",
+    )
+    torch_version: str | None = Field(
+        default="2.7.1",
+        validation_alias=AliasChoices("NEXUS_TORCH_VERSION", "TORCH_VERSION"),
+        description="与 ComfyUI 源码对齐的 PyTorch 版本（cu126 轮子）；master ComfyUI 需 ≥2.7",
+    )
+
     class Config:
         env_prefix = "NEXUS_"          # 环境变量前缀：NEXUS_HOST, NEXUS_PORT...
         env_file = ".env"
         case_sensitive = False
+        # extra="ignore"：.env / 环境变量里出现未在 Settings 声明的键时静默忽略。
+        #
+        # 为什么必须改（pydantic-settings 2.x 默认 extra="forbid"）：
+        #   用户按文档在 .env 写 PIP_INDEX_URL，后端直接 ValidationError 起不来。
+        #   对面向小白的桌面端产品，"配错也起得来"远优于"配错就白屏"。
+        #
+        # 已知代价（权衡后接受）：环境变量名拼错时不再报错，而是被静默忽略，
+        #   排查时需注意核对拼写（镜像源四类变量已显式声明，不受影响）。
+        extra = "ignore"
 
 
 # 全局单例，所有模块共享同一个配置实例
