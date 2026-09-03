@@ -7,7 +7,9 @@ NexusVideo Backend - 配置管理
 在整体架构中的位置：被所有模块导入，是整个 FastAPI 服务的"配置中枢"。
 """
 
+import os
 import re
+import sys
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import AliasChoices, Field, field_validator
@@ -211,16 +213,22 @@ class Settings(BaseSettings):
     @field_validator("comfyui_path", "python_executable", mode="before")
     @classmethod
     def _normalize_windows_path(cls, v):
+        """把 MSYS/Git-Bash 风格路径归一化为 Windows 风格，消除 D2-A 的 WinError 2。
+
+        只在 Windows 下转换（Linux/macOS 上 /usr/local/bin/python 这类是真实 POSIX
+        路径，绝不改写）；且仅当盘符真实存在时才转换，避免把 /usr/... 误转成 U:/...。
+        """
         if not isinstance(v, str):
             return v
+        if sys.platform != "win32":
+            return v
         s = v.strip()
-        # MSYS/Git-Bash: /c/Users/... -> C:/Users/...
-        if re.match(r"^/[a-zA-Z]/", s):
-            s = s[1].upper() + ":" + s[2:]
-        # Cygwin: /cygdrive/c/Users/... -> C:/Users/...
-        m = re.match(r"^/cygdrive/([a-zA-Z])/", s)
-        if m:
-            s = m.group(1).upper() + ":" + s[m.end() - 1:]
+        m = re.match(r"^/([a-zA-Z])/(.*)$", s)
+        if m and os.path.exists(f"{m.group(1).upper()}:/"):
+            return f"{m.group(1).upper()}:/{m.group(2)}"
+        m = re.match(r"^/cygdrive/([a-zA-Z])/(.*)$", s)
+        if m and os.path.exists(f"{m.group(1).upper()}:/"):
+            return f"{m.group(1).upper()}:/{m.group(2)}"
         return s
 
     class Config:
