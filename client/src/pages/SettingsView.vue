@@ -20,7 +20,7 @@
  * 组件状态用 emoji + 中文标签（api/settings.ts 已封装）
 -->
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import {
   getComponents,
   getSystemInfo,
@@ -31,12 +31,11 @@ import {
   statusEmoji,
   actionLabel,
   actionDanger,
-  installComfyUI,
-  getComfyUIInstallStatus,
   type ComponentStatusItem,
   type SystemInfo,
   type ErrorLog,
 } from '../api/settings';
+import OneClickPull from '../components/OneClickPull.vue';
 
 // ---------- 状态 ----------
 const components = ref<ComponentStatusItem[]>([]);
@@ -130,121 +129,10 @@ async function handleAction(item: ComponentStatusItem) {
   }
 }
 
-// ---------- ComfyUI 一键拉取（专用安装流程） ----------
-const installState = ref<{
-  active: boolean;
-  status: string;
-  progress: number;
-  stage: string;
-  message: string;
-}>({
-  active: false,
-  status: 'idle',
-  progress: 0,
-  stage: '',
-  message: '',
-});
-let installTimer: ReturnType<typeof setInterval> | null = null;
-
-function stopInstallPolling() {
-  if (installTimer !== null) {
-    clearInterval(installTimer);
-    installTimer = null;
-  }
-}
-
-async function startInstall() {
-  if (installState.value.active) return;
-  error.value = null;
-  stopInstallPolling();
-  // 初始态：克隆阶段
-  installState.value = {
-    active: true,
-    status: 'cloning',
-    progress: 0,
-    stage: '正在触发拉取任务…',
-    message: '',
-  };
-  // 1) 触发安装
-  try {
-    await installComfyUI();
-  } catch (e) {
-    stopInstallPolling();
-    installState.value = {
-      active: false,
-      status: 'error',
-      progress: 0,
-      stage: '',
-      message: `启动拉取失败: ${e}`,
-    };
-    return;
-  }
-  // 2) 轮询安装状态（每 2s）
-  installTimer = setInterval(async () => {
-    try {
-      const st = await getComfyUIInstallStatus();
-      if (st.status === 'done' || st.status === 'error') {
-        stopInstallPolling();
-        installState.value = {
-          active: false,
-          status: st.status,
-          progress: st.status === 'done' ? 100 : st.progress,
-          stage: st.stage,
-          message: st.message,
-        };
-        if (st.status === 'done') {
-          await fetchAll();
-        }
-      } else {
-        installState.value = {
-          active: true,
-          status: st.status,
-          progress: st.progress,
-          stage: st.stage,
-          message: st.message,
-        };
-      }
-    } catch (e) {
-      stopInstallPolling();
-      installState.value = {
-        active: false,
-        status: 'error',
-        progress: installState.value.progress,
-        stage: '',
-        message: `状态轮询失败: ${e}`,
-      };
-    }
-  }, 2000);
-}
-
-// ComfyUI 安装完成后的「启动」操作（复用现有启动逻辑）
-async function handleStartComfy() {
-  error.value = null;
-  actionInProgress.value['comfyui'] = true;
-  try {
-    const res = await executeComponentAction('comfyui', 'start');
-    await new Promise((r) => setTimeout(r, 1200));
-    await fetchAll();
-    if (res.message) {
-      console.log(`[设置] comfyui start: ${res.message}`);
-    }
-    // 启动成功后回到通用状态展示
-    const comfy = components.value.find((c) => c.id === 'comfyui');
-    if (comfy && comfy.status === 'ok') {
-      installState.value = {
-        active: false,
-        status: 'idle',
-        progress: 0,
-        stage: '',
-        message: '',
-      };
-    }
-  } catch (e) {
-    error.value = `启动失败: ${e}`;
-  } finally {
-    actionInProgress.value['comfyui'] = false;
-  }
-}
+// ---------- 一键拉取（统一由 components/OneClickPull.vue 管理） ----------
+// 旧的 comfyui 专用安装流程（installState/startInstall/handleStartComfy，基于
+// 已废弃的 /api/v1/settings/components/comfyui/action 轮询且暴露百分比）已移除，
+// 改用 M2 的「一键拉取」卡片：POST /install/pull + SSE /install/progress。
 
 // ---------- 辅助函数 ----------
 function statusRowClass(s: ComponentStatusItem['status']) {
@@ -265,7 +153,6 @@ function vramGb(mb?: number): string {
 }
 
 onMounted(fetchAll);
-onUnmounted(stopInstallPolling);
 </script>
 
 <template>
@@ -308,6 +195,9 @@ onUnmounted(stopInstallPolling);
           </button>
         </div>
       </header>
+
+      <!-- ====== 一键拉取卡片（M2 设置中心） ====== -->
+      <OneClickPull />
 
       <div class="settings-body">
         <!-- ====== 系统概况卡片 ====== -->
@@ -410,62 +300,8 @@ onUnmounted(stopInstallPolling);
 
               <!-- 操作按钮 -->
               <div class="component-row__action">
-                <!-- ComfyUI 专用：拉取中 -->
-                <button
-                  v-if="c.id === 'comfyui' && installState.active"
-                  class="btn-action btn-action--loading"
-                  disabled
-                >
-                  <svg
-                    width="14" height="14" viewBox="0 0 24 24"
-                    fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round"
-                    class="spin"
-                  >
-                    <circle cx="12" cy="12" r="9" stroke-opacity="0.3"/>
-                    <path d="M12 3a9 9 0 0 1 9 9"/>
-                  </svg>
-                  <span>拉取中…</span>
-                </button>
-
-                <!-- ComfyUI 专用：完成 → 启动 -->
-                <template v-else-if="c.id === 'comfyui' && installState.status === 'done'">
-                  <span class="btn-action btn-action--ok-static">✅ 完成</span>
-                  <button
-                    class="btn-action btn-action--primary"
-                    :disabled="actionInProgress['comfyui']"
-                    @click="handleStartComfy"
-                  >
-                    <svg
-                      v-if="actionInProgress['comfyui']"
-                      width="14" height="14" viewBox="0 0 24 24"
-                      fill="none" stroke="currentColor" stroke-width="2"
-                      stroke-linecap="round"
-                      class="spin"
-                    >
-                      <circle cx="12" cy="12" r="9" stroke-opacity="0.3"/>
-                      <path d="M12 3a9 9 0 0 1 9 9"/>
-                    </svg>
-                    <span>{{ actionInProgress['comfyui'] ? '启动中…' : '启动' }}</span>
-                  </button>
-                </template>
-
-                <!-- ComfyUI 专用：错误 → 重试 -->
-                <button
-                  v-else-if="c.id === 'comfyui' && installState.status === 'error'"
-                  class="btn-action btn-action--danger"
-                  @click="startInstall"
-                >🔁 重试</button>
-
-                <!-- ComfyUI 专用：未安装 → 一键拉取 -->
-                <button
-                  v-else-if="c.id === 'comfyui' && c.status === 'missing'"
-                  class="btn-action btn-action--primary btn-action--primary-lg"
-                  @click="startInstall"
-                >🚀 一键拉取 ComfyUI</button>
-
-                <!-- 通用操作按钮（其他组件 / ComfyUI 其它状态） -->
-                <template v-else>
+                <!-- ComfyUI 的拉取/启动统一由「一键拉取」卡片管理，这里只展示状态 -->
+                <template v-if="c.id !== 'comfyui'">
                   <button
                     v-if="c.action && c.status !== 'checking'"
                     class="btn-action"
@@ -499,34 +335,7 @@ onUnmounted(stopInstallPolling);
                     ⏳ 检测中…
                   </span>
                 </template>
-              </div>
-
-              <!-- ComfyUI 专用：安装进度面板 -->
-              <div
-                v-if="c.id === 'comfyui' && (installState.active || installState.status === 'done' || installState.status === 'error')"
-                class="component-row__install"
-              >
-                <div class="install-progress" v-if="installState.status !== 'done'">
-                  <div class="progress-bar">
-                    <div
-                      class="progress-bar__fill"
-                      :class="{ 'progress-bar__fill--error': installState.status === 'error' }"
-                      :style="{ width: `${installState.progress}%` }"
-                    />
-                  </div>
-                  <span class="progress-bar__text">{{ installState.progress }}%</span>
-                </div>
-                <div
-                  class="install-stage"
-                  :class="{
-                    'install-stage--error': installState.status === 'error',
-                    'install-stage--done': installState.status === 'done',
-                  }"
-                >
-                  <template v-if="installState.status === 'error'">❌ {{ installState.message || '安装失败，请点击重试' }}</template>
-                  <template v-else-if="installState.status === 'done'">✅ ComfyUI 已安装完成，点击「启动」运行</template>
-                  <template v-else>⏳ {{ installState.stage || installState.message || '正在准备…' }}</template>
-                </div>
+                <span v-else class="btn-action btn-action--ok-static">📦 一键拉取中管理</span>
               </div>
             </div>
 
