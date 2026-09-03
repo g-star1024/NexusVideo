@@ -95,6 +95,9 @@ from routers import settings as settings_router  # noqa: F401
 from config import settings as _config_settings  # 恢复 config.settings 的引用
 settings = _config_settings  # 确保下方日志配置等处使用的 settings 仍是 config 的实例
 
+# 一键拉取路由：始终加载（不依赖 ComfyUI / torch，设置中心尤其需要）
+from routers.install import router as install_router  # noqa: F401
+
 
 # ================================================================
 # 日志配置
@@ -329,6 +332,7 @@ async def generic_error_handler(request: Request, exc: Exception) -> JSONRespons
 # --- P2 阶段新增路由：认证（始终注册，不依赖 ComfyUI） ---
 app.include_router(auth.router)              # /api/v1/auth/*
 app.include_router(settings_router.router)   # /api/v1/settings/*  设置中心
+app.include_router(install_router)           # /install/*  一键拉取（不受 comfyui_modules_available 门控）
 
 # --- 推理 / 生成相关路由：仅在 ComfyUI 模块可用时注册 ---
 if comfyui_modules_available:

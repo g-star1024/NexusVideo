@@ -1,0 +1,90 @@
+{
+  "manifest_version": 1,
+  "_comment": "NexusVideo 一键拉取清单（M1）。所有 item.target 相对 settings.staging_dir（默认 D:/nexusvideo_staging）。模型按 comfyui/extra_model_paths.yaml 的 base_path 映射落盘：staging/models/<子目录>/。required_models 的路径相对 base_path（= staging/models），供 /install/verify 自检。kind=file 走 HTTP Range 续传+原子重命名；kind=archive 走 zip 下载+解压。urls[0] 为主源，urls[1] 为镜像回退；item.prefer_env 可让运行时用 settings 里的覆盖源（如 comfyui_tarball_url）。",
+  "items": [
+    {
+      "category": "comfyui_source",
+      "name": "ComfyUI",
+      "kind": "archive",
+      "target": "comfyui",
+      "prefer_env": "comfyui_tarball_url",
+      "urls": [
+        "https://github.com/comfyanonymous/ComfyUI/archive/refs/heads/master.zip",
+        "https://ghproxy.net/https://github.com/comfyanonymous/ComfyUI/archive/refs/heads/master.zip"
+      ],
+      "size_bytes": null,
+      "size_tolerance_pct": 0.05,
+      "stage": "prepare"
+    },
+    {
+      "category": "custom_node",
+      "name": "ComfyUI-WanVideoWrapper",
+      "kind": "archive",
+      "target": "custom_nodes/ComfyUI-WanVideoWrapper",
+      "urls": [
+        "https://github.com/kijai/ComfyUI-WanVideoWrapper/archive/refs/heads/main.zip",
+        "https://ghproxy.net/https://github.com/kijai/ComfyUI-WanVideoWrapper/archive/refs/heads/main.zip"
+      ],
+      "size_bytes": null,
+      "size_tolerance_pct": 0.05,
+      "stage": "core"
+    },
+    {
+      "category": "custom_node",
+      "name": "ComfyUI-VideoHelperSuite",
+      "kind": "archive",
+      "target": "custom_nodes/ComfyUI-VideoHelperSuite",
+      "urls": [
+        "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/archive/refs/heads/main.zip",
+        "https://ghproxy.net/https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/archive/refs/heads/main.zip"
+      ],
+      "size_bytes": null,
+      "size_tolerance_pct": 0.05,
+      "stage": "core"
+    },
+    {
+      "category": "model",
+      "name": "umt5_xxl_fp8_e4m3fn",
+      "kind": "file",
+      "target": "models/text_encoders/umt5_xxl_fp8_e4m3fn.safetensors",
+      "urls": [
+        "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors",
+        "https://hf-mirror.com/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"
+      ],
+      "size_bytes": 6700000000,
+      "size_tolerance_pct": 0.05,
+      "stage": "model"
+    },
+    {
+      "category": "model",
+      "name": "wan_2.1_vae",
+      "kind": "file",
+      "target": "models/vae/wan_2.1_vae.safetensors",
+      "urls": [
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+        "https://hf-mirror.com/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+      ],
+      "size_bytes": 240000000,
+      "size_tolerance_pct": 0.05,
+      "stage": "model"
+    },
+    {
+      "category": "model",
+      "name": "wan2.1-t2v-1.3b_fp16",
+      "kind": "file",
+      "target": "models/diffusion_models/wan2.1-t2v-1.3b_fp16.safetensors",
+      "urls": [
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors",
+        "https://hf-mirror.com/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors"
+      ],
+      "size_bytes": 2640000000,
+      "size_tolerance_pct": 0.05,
+      "stage": "model"
+    }
+  ],
+  "required_models": [
+    "text_encoders/umt5_xxl_fp8_e4m3fn.safetensors",
+    "vae/wan_2.1_vae.safetensors",
+    "diffusion_models/wan2.1-t2v-1.3b_fp16.safetensors"
+  ]
+}

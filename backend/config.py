@@ -7,9 +7,10 @@ NexusVideo Backend - 配置管理
 在整体架构中的位置：被所有模块导入，是整个 FastAPI 服务的"配置中枢"。
 """
 
+import re
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -108,6 +109,13 @@ class Settings(BaseSettings):
         description="生成视频输出目录"
     )
 
+    # 一键拉取默认暂存根目录（ComfyUI 源码 / 自定义节点 / 模型落盘处）
+    # 硬性要求：禁止往 C: 系统盘写运行时产物，默认落在 D: 暂存区。
+    staging_dir: str = Field(
+        default="D:/nexusvideo_staging",
+        description="一键拉取默认暂存根目录（模型/节点/产物落盘处，默认 D:）"
+    )
+
     # ================================================================
     # 推理路由（本地/云端切换）—— P2 阶段核心
     # ================================================================
@@ -186,6 +194,34 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_TORCH_VERSION", "TORCH_VERSION"),
         description="与 ComfyUI 源码对齐的 PyTorch 版本（cu126 轮子）；master ComfyUI 需 ≥2.7",
     )
+
+    # ================================================================
+    # D2-A 根因修复：Windows 路径归一化
+    # ----------------------------------------------------------------
+    # 背景：用户在 Git-Bash / MSYS / Cygwin 终端里复制的路径形如
+    #   /c/Users/foo/.venv-comfyui/Scripts/python.exe   （MSYS/Git-Bash）
+    #   /cygdrive/c/Users/foo/comfyui                    （Cygwin）
+    # 这类"伪 Unix"路径直接传给 Windows CreateProcess 会报 WinError 2
+    # （系统找不到指定的文件），导致 ComfyUI 启动 / 依赖安装失败。
+    # 这里在配置加载期统一归一化为 Windows 盘符路径 C:/Users/...，
+    # 一次性覆盖 process_manager._build_start_command 与
+    # routers/settings.py:_resolve_launch_python 两处 create_subprocess_exec。
+    # 相对路径（./comfyui）、已是正确的 Windows 路径（C:/...）保持不变。
+    # ================================================================
+    @field_validator("comfyui_path", "python_executable", mode="before")
+    @classmethod
+    def _normalize_windows_path(cls, v):
+        if not isinstance(v, str):
+            return v
+        s = v.strip()
+        # MSYS/Git-Bash: /c/Users/... -> C:/Users/...
+        if re.match(r"^/[a-zA-Z]/", s):
+            s = s[1].upper() + ":" + s[2:]
+        # Cygwin: /cygdrive/c/Users/... -> C:/Users/...
+        m = re.match(r"^/cygdrive/([a-zA-Z])/", s)
+        if m:
+            s = m.group(1).upper() + ":" + s[m.end() - 1:]
+        return s
 
     class Config:
         env_prefix = "NEXUS_"          # 环境变量前缀：NEXUS_HOST, NEXUS_PORT...
