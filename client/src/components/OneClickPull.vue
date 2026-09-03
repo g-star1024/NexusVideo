@@ -11,14 +11,14 @@
  *   - 完成 → 「准备就绪」+「开始创作」跳生成页
  *   - 自检警告 → 列出缺失模型（文件名）+ 提示检查网络后重试
  *
- * 衔接 tauri-pull-ipc：目录选择经 api/dialog.ts 的 selectInstallDir()
- * 拿到一个普通字符串路径（D:/nexusvideo_staging 等）。
+ * 衔接 tauri-pull-ipc：目录选择经 api/install.ts 的 pickInstallDir()
+ * / auditInstallDir() 拿到 DirAudit（含规范路径与风险等级）。
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useInstallStore } from '../stores/install';
-import { selectInstallDir, isSystemDrive } from '../api/dialog';
+import { pickInstallDir, auditInstallDir, type DirAudit } from '../api/install';
 
 const store = useInstallStore();
 const router = useRouter();
@@ -31,8 +31,8 @@ const dirModel = computed<string>({
   set: (v: string) => store.setTargetDir(v),
 });
 
-// 选到系统盘 C: → 明确警示（仍允许继续）
-const systemDriveWarn = computed(() => isSystemDrive(store.targetDir));
+// 当前目录体检结果（picker / 手输回显都用同一份）
+const dirAudit = ref<DirAudit | null>(null);
 
 // 缺失模型只展示文件名（basename），降低技术感
 function basename(p: string): string {
@@ -40,8 +40,16 @@ function basename(p: string): string {
 }
 
 async function openPicker() {
-  const p = await selectInstallDir(store.targetDir);
-  if (p) store.setTargetDir(p);
+  const a = await pickInstallDir(store.targetDir);
+  if (a) {
+    dirAudit.value = a;
+    store.setTargetDir(a.path);
+  }
+}
+
+// 手动输入：每次变更都向后端体检一遍，用于实时禁用/警示
+function onDirInput(v: string) {
+  auditInstallDir(v).then((a) => (dirAudit.value = a));
 }
 
 function goCreate() {
@@ -75,15 +83,17 @@ onUnmounted(() => store.closeProgress());
           spellcheck="false"
           placeholder="选择安装位置，如 D:/nexusvideo_staging"
           aria-label="安装位置"
+          @input="onDirInput(($event.target as HTMLInputElement).value)"
         />
         <button class="pull-btn pull-btn--ghost" @click="openPicker">
           选择目录
         </button>
       </div>
-      <p v-if="systemDriveWarn" class="pull-target__warn">
-        ⚠️ 你选择的是系统盘（C:）。系统盘空间紧张可能导致拉取失败，
-        建议改用其他盘（如 D:/nexusvideo_staging）。确认继续也可以点「一键拉取」。
-      </p>
+      <div v-if="dirAudit && dirAudit.warnings.length" class="pull-target__warn">
+        <p v-for="w in dirAudit.warnings" :key="w" class="pull-target__warn-item">
+          ⚠️ {{ w }}
+        </p>
+      </div>
       <p v-else class="pull-target__hint">
         默认装在 D:/nexusvideo_staging，文件较大请确保磁盘空间充足。
       </p>
@@ -95,6 +105,7 @@ onUnmounted(() => store.closeProgress());
       <button
         v-if="store.status === 'idle'"
         class="pull-btn pull-btn--primary pull-btn--lg"
+        :disabled="dirAudit?.level === 'block'"
         @click="store.startPull()"
       >
         🚀 一键拉取
@@ -276,6 +287,12 @@ onUnmounted(() => store.closeProgress());
   border-radius: var(--radius-sm);
   padding: 8px 12px;
   line-height: var(--line-height-small);
+}
+.pull-target__warn-item {
+  margin: 0;
+}
+.pull-target__warn-item + .pull-target__warn-item {
+  margin-top: 6px;
 }
 
 /* ====== 状态区 ====== */

@@ -17,10 +17,10 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import {
-  pullInstall,
+  startInstall,
   subscribeInstallProgress,
   type InstallProgressEvent,
-  type InstallStage,
+  type DirAudit,
 } from '../api/install';
 
 export type InstallStatus = 'idle' | 'pulling' | 'done' | 'failed' | 'warning';
@@ -35,7 +35,7 @@ export const useInstallStore = defineStore('install', () => {
   );
   const taskId = ref<string | null>(null);
   const status = ref<InstallStatus>('idle');
-  const stage = ref<InstallStage | null>(null);
+  const stage = ref<string | null>(null);
   /** 后端下发的「人话」文案，直接展示给用户 */
   const message = ref<string>('');
   /** 自检警告时缺失的模型相对路径清单（仅 warning 态非空） */
@@ -46,8 +46,8 @@ export const useInstallStore = defineStore('install', () => {
    */
   const errorDetail = ref<string | null>(null);
 
-  // ---------- 非响应式（SSE 实例） ----------
-  let es: EventSource | null = null;
+  // ---------- 非响应式（SSE 退订函数） ----------
+  let es: (() => void) | null = null;
   let mockTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ---------- 计算属性 ----------
@@ -60,9 +60,7 @@ export const useInstallStore = defineStore('install', () => {
   // ---------- 内部：关闭 SSE ----------
   function closeEs() {
     if (es) {
-      es.onmessage = null;
-      es.onerror = null;
-      es.close();
+      es();
       es = null;
     }
   }
@@ -130,14 +128,14 @@ export const useInstallStore = defineStore('install', () => {
     message.value = '正在准备运行环境…';
 
     try {
-      const res = await pullInstall(targetDir.value || undefined);
+      const res = await startInstall(targetDir.value || undefined);
       taskId.value = res.task_id;
       // 打开 SSE 订阅进度
       closeEs();
-      es = subscribeInstallProgress(
-        applyEvent,
-        (err) => console.warn('[install] SSE 连接异常', err),
-      );
+      es = await subscribeInstallProgress({
+        onProgress: applyEvent,
+        onFailed: (e) => console.warn('[install] SSE 连接异常', e),
+      });
     } catch (e) {
       // POST 失败（后端未起 / 端口不通）：给小白友好提示，仍可重试
       status.value = 'failed';
@@ -165,12 +163,12 @@ export const useInstallStore = defineStore('install', () => {
    * 导航离开再回来时自愈：若仍在 pulling 但连接已断，重新订阅。
    * 后端进度总线会回放最近一条事件，UI 立即回到正确阶段。
    */
-  function ensureSubscription() {
+  async function ensureSubscription() {
     if (status.value === 'pulling' && es === null) {
-      es = subscribeInstallProgress(
-        applyEvent,
-        (err) => console.warn('[install] SSE 连接异常（重连）', err),
-      );
+      es = await subscribeInstallProgress({
+        onProgress: applyEvent,
+        onFailed: (e) => console.warn('[install] SSE 连接异常（重连）', e),
+      });
     }
   }
 
