@@ -207,6 +207,42 @@ pub fn check_disk_space() -> std::io::Result<DiskSpaceInfo> {
     })
 }
 
+/// 查询「任意目标目录」所在卷的 (free, total) 字节数。
+///
+/// 与 `check_disk_space()` 的区别：后者固定查 output_dir，本函数接受任意路径，
+/// 供 M2 一键拉取的目标盘体检使用（install_bridge.rs）。
+///
+/// 关键健壮性：Windows 的 GetDiskFreeSpaceExW 与 posix 的 `df` 都要求路径**已存在**，
+/// 而用户刚选/刚输入的 staging 目录往往还没创建。这里先向上回溯到最近一个存在的
+/// 祖先目录（同卷），再做查询——避免"目录不存在 → 查询失败 → 静默无空间信息"。
+pub(crate) fn disk_space_of(dir: &Path) -> std::io::Result<(u64, u64)> {
+    // 向上回溯到最近的存在路径（同一个卷，空间数据等价）
+    let mut probe: &Path = dir;
+    loop {
+        if probe.exists() {
+            break;
+        }
+        match probe.parent() {
+            Some(p) if p != probe => probe = p,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("目标路径及其所有上级均不存在: {}", dir.display()),
+                ))
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        get_disk_space_windows(probe)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        get_disk_space_posix(probe)
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn get_disk_space_windows(dir: &Path) -> std::io::Result<(u64, u64)> {
     use std::ffi::OsStr;
@@ -601,7 +637,7 @@ fn dir_total_size(dir: &Path) -> u64 {
     total
 }
 
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)
     } else if bytes < 1024 * 1024 {

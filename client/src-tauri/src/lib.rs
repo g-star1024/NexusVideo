@@ -12,6 +12,7 @@ pub mod error;
 pub mod events;
 pub mod file_manager;
 pub mod init_flow;
+pub mod install_bridge;
 pub mod paths;
 pub mod process_manager;
 pub mod startup;
@@ -373,6 +374,14 @@ pub fn run() {
             crash_handler::reload_frontend,
             crash_handler::get_crash_reports,
             crash_handler::clear_crash_reports,
+            // ---- M2: 设置中心 · 一键拉取（install_bridge.rs）----
+            install_bridge::get_default_install_dir,
+            install_bridge::audit_install_dir,
+            install_bridge::pick_install_dir,
+            install_bridge::start_install,
+            install_bridge::verify_install,
+            install_bridge::listen_install_progress,
+            install_bridge::stop_install_progress,
         ])
         .run(tauri::generate_context!());
 

@@ -39,6 +39,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
 # ---- HTTP 客户端（Rust → FastAPI 转发 + 崩溃上报）----
+# 刻意不开 `stream` feature：SSE 桥接改用 Response::chunk()，开 stream 会连带把
+# wasm-streams 写进 Cargo.lock，使 CI 的 cargo check --offline（缓存键 = Cargo.lock
+# 哈希）缓存未命中而失败。
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # ---- WebSocket（直连 ComfyUI/FastAPI 进度流）----

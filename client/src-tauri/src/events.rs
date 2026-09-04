@@ -25,6 +25,14 @@ pub mod event_name {
 
     // ---- Task #13: 崩溃上报 ----
     pub const CRASH: &str = "app://crash";              // Rust 层 panic 崩溃报告
+
+    // ---- M2: 设置中心 · 一键拉取（install_bridge.rs）----
+    /// 拉取阶段进度（SSE 桥接转发，载荷 = 后端 /install/progress 的原始 JSON）
+    pub const INSTALL_PROGRESS: &str = "install://progress";
+    /// 拉取全部完成（后端事件带 done:true）
+    pub const INSTALL_DONE: &str = "install://done";
+    /// 拉取失败（后端事件带 failed:true，或 SSE 连接异常中断）
+    pub const INSTALL_FAILED: &str = "install://failed";
 }
 
 /// 进程状态枚举
