@@ -23,10 +23,15 @@ API 清单：
 import asyncio
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,6 +47,20 @@ from exceptions import ErrorCode
 from core.vram import _get_vram_total_mb, _has_nvidia_gpu
 
 router = APIRouter(prefix="/api/v1/settings", tags=["设置中心"])
+
+# ================================================================
+# 子进程输出解码：中文 Windows 关键兼容点
+# ================================================================
+# 现象：nvidia-smi / wmic / powershell / pip 在中文 Windows（GBK 代码页）上
+#       会输出非 UTF-8 字节（典型为 0xC1 开头的 GBK 中文，出现在 nvidia-smi
+#       的进程列表段、pip 的进度行）。
+# 坑点：subprocess.run(..., text=True) 使用 locale 编码**严格**解码，一旦
+#       遇到非法字节，异常抛在内部读取线程里，子进程结果对象仍"正常返回"，
+#       但 result.stdout 会被置为 None。上层 `result.stdout.split(...)` 随即
+#       AttributeError，被 except 吞掉后表现为「CUDA unknown / 字段为空」。
+# 处置：统一改用 errors="replace"，保证 stdout 永远是 str（不会是 None）。
+#       代价：个别中文字符变替换符，但不影响 ASCII 关键字段（版本号/数值）解析。
+_TEXT_KW: dict[str, Any] = {"encoding": "utf-8", "errors": "replace"}
 
 # 项目根目录（backend/ 的父目录）
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -178,9 +197,45 @@ def _build_model_comp_base(model_id: str, reg: dict[str, Any]) -> dict[str, Any]
 # 官方仓库（可用 COMFYUI_GIT_MIRROR 环境变量覆盖为镜像/代理地址）
 _COMFYUI_REPO_DEFAULT = "https://github.com/comfyanonymous/ComfyUI.git"
 
-# PyTorch CUDA 轮子索引。cu124 覆盖 Turing(sm_75) ~ Blackwell，
-# 兼容 GTX 16xx / RTX 20xx-40xx；可用 TORCH_INDEX_URL 覆盖为国内镜像。
-_TORCH_CUDA_INDEX_DEFAULT = "https://download.pytorch.org/whl/cu124"
+# 源码压缩包地址（无 Git / git 协议被屏蔽时的回退下载源）。
+# codeload.github.com 是 GitHub 的纯 HTTPS 归档接口：只要浏览器能打开 GitHub 就能下载，
+# 既不要求本机安装 Git，也不走常被公司/校园网屏蔽的 git 协议。
+# 实测对照：同一台机器 `git ls-remote` 在 21 秒后 Failed to connect to github.com:443，
+# 而 curl 该压缩包 HTTP 200、约 12MB、5~7MB/s 正常。
+# 可用 COMFYUI_TARBALL_URL 显式覆盖为国内镜像的同源压缩包地址。
+_COMFYUI_TARBALL_DEFAULT = (
+    "https://codeload.github.com/comfyanonymous/ComfyUI/tar.gz/refs/heads/master"
+)
+
+
+def _comfyui_default_tarball_url() -> str:
+    """
+    按锁定版本（COMFYUI_SOURCE_TAG，默认 master）拼出 codeload 压缩包地址。
+
+    master → refs/heads/master；指定 tag/commit → refs/tags/<tag>。
+    把源码版本做成显式配置项，是为了"一键拉取"结果可复现，
+    避免 master 漂移再次引入 torch 不兼容这类产品级缺陷。
+    """
+    tag = settings.comfyui_source_tag or "master"
+    ref = f"refs/tags/{tag}" if tag != "master" else "refs/heads/master"
+    return f"https://codeload.github.com/comfyanonymous/ComfyUI/tar.gz/{ref}"
+
+
+# PyTorch CUDA 轮子索引与版本：与 ComfyUI 源码**显式对齐锁定**（产品级根因修复）。
+#
+# 根因（实测）：ComfyUI 源码（含 comfy-kitchen==0.2.31）用 PEP585 内置泛型 `list[int]`
+# 标注 torch.library.custom_op；torch <2.7 的 infer_schema 只白名单 typing.List[int]，
+# 直接抛 ValueError。cu124 索引的 torch 顶到 2.6.0，而 master ComfyUI 要求 ≥2.7，
+# 两者组合必然起不来。因此：
+#   - cu 索引从 cu124 升到 cu126：cu126 是本机已装 NVIDIA 驱动（560.94，CUDA 上限 12.6）
+#     能支持的最高 CUDA 大版本（cu128 需驱动 ≥570，本机不满足）；sm_75(Turing) 各版本都支持。
+#   - torch 锁 2.7.1：首个修好该问题的版本，且贴近 comfy-kitchen 0.2.31 时代，
+#     避免 2.13 等过新轮子引入新的不兼容漂移。
+#   均可用 NEXUS_TORCH_CUDA_INDEX_URL / TORCH_INDEX_URL / NEXUS_TORCH_VERSION / TORCH_VERSION 覆盖。
+_TORCH_CUDA_INDEX_DEFAULT = "https://download.pytorch.org/whl/cu126"
+_TORCH_VERSION_PIN = "2.7.1"
+_TORCHVISION_VERSION_PIN = "0.22.1"
+_TORCHAUDIO_VERSION_PIN = "2.7.1"
 
 # 各阶段超时（秒）。torch 轮子约 2.5GB，慢网络下需要较长时间。
 _TIMEOUT_GIT_CLONE = 300
@@ -188,8 +243,15 @@ _TIMEOUT_TORCH = 1800
 _TIMEOUT_REQUIREMENTS = 900
 _TIMEOUT_VERIFY = 120
 
+# 源码压缩包下载（回退方案）的超时控制：
+# 单次读超时只防"连上后卡死"，整体上限才防"慢速拖死"，两者都要有。
+_TARBALL_READ_TIMEOUT = 30
+_TIMEOUT_SOURCE_DOWNLOAD = 600
+_TARBALL_CHUNK = 256 * 1024
+
 # 各阶段预估耗时（秒），仅用于进度条平滑推进（非硬性约束）
 _ETA_GIT_CLONE = 60.0
+_ETA_SOURCE_DOWNLOAD = 90.0
 _ETA_TORCH = 600.0
 _ETA_REQUIREMENTS = 180.0
 
@@ -241,6 +303,7 @@ _comfyui_install_state: dict[str, Any] = {
     "torch_version": None,
     "cuda_available": None,
     "mirrors": None,               # 实际生效的镜像配置
+    "source_method": None,         # 源码实际获取方式：git | tarball（排障用）
     "log_tail": [],
 }
 
@@ -269,7 +332,7 @@ def _detect_python_env() -> dict[str, Any]:
         try:
             result = subprocess.run(
                 [str(venv_python), "--version"],
-                capture_output=True, timeout=5, text=True,
+                capture_output=True, timeout=5, **_TEXT_KW,
             )
             version = result.stdout.strip() or result.stderr.strip()
             return {
@@ -298,7 +361,7 @@ def _detect_python_env() -> dict[str, Any]:
     try:
         result = subprocess.run(
             [sys.executable, "--version"],
-            capture_output=True, timeout=5, text=True,
+            capture_output=True, timeout=5, **_TEXT_KW,
         )
         version = result.stdout.strip() or result.stderr.strip()
         return {
@@ -390,13 +453,40 @@ def _detect_comfyui() -> dict[str, Any]:
             }
 
 
+# nvidia-smi 头部形如：
+#   | NVIDIA-SMI 560.94    Driver Version: 560.94    CUDA Version: 12.6     |
+# 注意：不能用 split("CUDA Version")[-1].strip() —— 会残留前导 ':' 与尾部 '|'
+# （实测解析出 ': 12.6     |'）。改用正则精确提取纯版本号。
+_CUDA_VERSION_RE = re.compile(r"CUDA\s+Version\s*:\s*([0-9][0-9.]*)")
+
+
+def _read_nvidia_smi_text() -> str:
+    """读取 nvidia-smi 完整输出。
+
+    正常返回 str；nvidia-smi 不存在 / 超时 / 解码异常一律返回空串，绝不抛异常。
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, timeout=5, **_TEXT_KW
+        )
+        return result.stdout or ""
+    except Exception:
+        return ""
+
+
+def _parse_cuda_version(text: str) -> str:
+    """从 nvidia-smi 输出中提取 CUDA 版本号，取不到返回 'unknown'。"""
+    m = _CUDA_VERSION_RE.search(text or "")
+    return m.group(1) if m else "unknown"
+
+
 def _detect_gpu_driver() -> dict[str, Any]:
     """检测 NVIDIA GPU 驱动与 CUDA。"""
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,driver_version,memory.total,memory.free",
              "--format=csv,noheader,nounits"],
-            capture_output=True, timeout=5, text=True,
+            capture_output=True, timeout=5, **_TEXT_KW,
         )
         if result.returncode != 0:
             # nvidia-smi 存在但返回错误
@@ -421,18 +511,10 @@ def _detect_gpu_driver() -> dict[str, Any]:
         vram_total = parts[2] if len(parts) > 2 else "?"
         vram_free = parts[3] if len(parts) > 3 else "?"
 
-        # 尝试获取 CUDA 版本（从 nvidia-smi 输出末尾解析）
-        try:
-            cuda_result = subprocess.run(
-                ["nvidia-smi"], capture_output=True, timeout=5, text=True
-            )
-            cuda_version = "unknown"
-            for line in cuda_result.stdout.split("\n"):
-                if "CUDA Version" in line:
-                    cuda_version = line.split("CUDA Version")[-1].strip().rstrip("]").strip()
-                    break
-        except Exception:
-            cuda_version = "unknown"
+        # 尝试获取 CUDA 版本（从 nvidia-smi 完整输出的头部解析）
+        # 注意：必须用安全解码的 _TEXT_KW，否则中文 Windows 上 stdout 为 None，
+        #       for 循环抛 AttributeError 被吞掉 → 永远显示 "CUDA unknown"。
+        cuda_version = _parse_cuda_version(_read_nvidia_smi_text())
 
         return {
             "id": "gpu_driver",
@@ -474,26 +556,25 @@ def _detect_gpu_driver() -> dict[str, Any]:
         }
 
 
+# 匹配 "ffmpeg version 9.0.1-essentials_build-..." 中的纯版本号
+_FFMPEG_VERSION_RE = re.compile(r"ffmpeg\s+version\s+([0-9][0-9.]*)", re.IGNORECASE)
+
+
 def _detect_ffmpeg() -> dict[str, Any]:
     """检测 FFmpeg 视频编解码器。"""
     try:
         result = subprocess.run(
             ["ffmpeg", "-version"],
-            capture_output=True, timeout=5, text=True,
+            capture_output=True, timeout=5, **_TEXT_KW,
         )
         if result.returncode == 0:
             first_line = result.stdout.split("\n")[0].strip() if result.stdout else "FFmpeg (version unknown)"
-            # 尝试解析版本 "ffmpeg version 6.1.1 ..."
-            version = "unknown"
-            for part in first_line.split():
-                if part.isdigit() or (
-                    part.count(".") == 2 and all(x.isdigit() for x in part.split("."))
-                ):
-                    version = part
-                    break
-                if part.count(".") == 1 and all(x.isdigit() for x in part.split(".")):
-                    version = part
-                    break
+            # 解析版本。实测 Windows gyan.dev 构建的首行为：
+            #   ffmpeg version 9.0.1-essentials_build-www.gyan.dev Copyright (c) ...
+            # 版本号后面紧跟着 "-essentials_build-..." 后缀，按空格切词再判断是否
+            # 纯数字会整词失配（旧实现因此永远返回 "unknown"）。改用正则精确匹配。
+            m = _FFMPEG_VERSION_RE.search(first_line)
+            version = m.group(1) if m else "unknown"
             return {
                 "id": "ffmpeg",
                 "name": "FFmpeg 视频编解码器",
@@ -922,7 +1003,7 @@ def _resolve_launch_python() -> tuple[str, str | None]:
     try:
         r = subprocess.run(
             [resolved, "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
-            capture_output=True, timeout=10, text=True,
+            capture_output=True, timeout=10, **_TEXT_KW,
         )
         ver = (r.stdout or "").strip()
         if ver:
@@ -953,14 +1034,26 @@ def _resolve_launch_python() -> tuple[str, str | None]:
 
 
 def _resolve_mirrors() -> dict[str, str | None]:
-    """读取镜像/代理相关环境变量。"""
+    """
+    读取镜像/代理配置。
+
+    优先级：Settings（.env 中带 NEXUS_ 前缀或裸名均可，见 config.py 的 AliasChoices）
+           → 进程环境变量 os.getenv。
+
+    保留 os.getenv 回退的理由：兼容"后端启动之后才设置环境变量"的场景，
+    以及用户按旧文档直接写裸变量的习惯；两类读法结果一致，不会互相打架。
+    """
     return {
-        "git_repo": os.getenv("COMFYUI_GIT_MIRROR") or None,
-        "pip_index_url": os.getenv("PIP_INDEX_URL") or None,
+        "git_repo": settings.comfyui_git_mirror or os.getenv("COMFYUI_GIT_MIRROR") or None,
+        "pip_index_url": settings.pip_index_url or os.getenv("PIP_INDEX_URL") or None,
         "torch_index_url": (
-            os.getenv("TORCH_INDEX_URL")
+            settings.torch_index_url
+            or os.getenv("TORCH_INDEX_URL")
             or os.getenv("TORCH_CUDA_INDEX_URL")
             or None
+        ),
+        "tarball_url": (
+            settings.comfyui_tarball_url or os.getenv("COMFYUI_TARBALL_URL") or None
         ),
     }
 
@@ -1130,6 +1223,268 @@ def _diagnose_install_failure(log_tail_text: str, stage: str = "") -> str:
     return f"安装未成功，请查看安装日志排查。最后输出：{log_tail_text[:200]}"
 
 
+def _cleanup_partial_source_dir() -> None:
+    """
+    清理下载/克隆失败留下的半成品目录。
+
+    必要性：git clone 失败时仍会创建出目标目录（哪怕只有 .git），
+    若不清理，后续压缩包解压/搬迁会因目录非空而失败或混入残缺文件。
+    """
+    if not _COMFYUI_DIR.exists():
+        return
+    _append_install_log(f"[信息] 正在清理未完成的残留文件：{_COMFYUI_DIR}")
+    shutil.rmtree(_COMFYUI_DIR, ignore_errors=True)
+    if _COMFYUI_DIR.exists():
+        raise _InstallError(
+            f"无法清理残留目录 {_COMFYUI_DIR}",
+            "该目录可能正被其他程序占用（资源管理器、杀毒软件、终端窗口）。"
+            "请关闭相关程序后手动删除该目录，再重新点击安装",
+        )
+
+
+def _resolve_tarball_url(mirrors: dict[str, str | None], repo: str) -> str:
+    """
+    决定回退下载用的源码压缩包地址。
+
+    优先级：
+      1. 显式配置 COMFYUI_TARBALL_URL / NEXUS_COMFYUI_TARBALL_URL（镜像场景首选）
+      2. 仓库地址本身就是归档地址（codeload / .tar.gz / /archive/）→ 原样使用
+      3. 仓库地址是 GitHub（含默认官方仓库）→ 自动转换为 codeload 归档地址
+      4. 其他镜像（如 Gitee 的 git 地址，无法推导）→ 回落到官方 codeload 地址并记日志
+    """
+    explicit = mirrors.get("tarball_url")
+    if explicit:
+        return explicit
+
+    lowered = (repo or "").lower()
+    if ("codeload" in lowered or "/archive/" in lowered
+            or lowered.endswith((".tar.gz", ".tgz", ".zip"))):
+        return repo
+
+    parsed = urllib.parse.urlparse(repo)
+    host = (parsed.hostname or "").lower()
+    if host.endswith("github.com"):
+        owner_name = parsed.path.strip("/")
+        if owner_name.endswith(".git"):
+            owner_name = owner_name[: -len(".git")]
+        if "/" in owner_name:
+            tag = settings.comfyui_source_tag or "master"
+            ref = f"refs/tags/{tag}" if tag != "master" else "refs/heads/master"
+            return f"https://codeload.github.com/{owner_name}/tar.gz/{ref}"
+
+    _append_install_log(
+        f"[信息] 镜像地址 {repo} 无法自动推导压缩包地址，改用官方下载地址"
+    )
+    return _comfyui_default_tarball_url()
+
+
+def _extract_tarball_safely(tar: "tarfile.TarFile", dest: Path) -> None:
+    """
+    安全解压：阻断 ../ 路径穿越（CVE-2007-4559 类风险）。
+
+    Python 3.12+ 直接用官方 filter="data"；低版本手工校验每个成员的目标路径。
+    """
+    if sys.version_info >= (3, 12):
+        tar.extractall(path=str(dest), filter="data")
+        return
+
+    root = dest.resolve()
+    safe_members = []
+    for member in tar.getmembers():
+        rel = member.name.replace("\\", "/").lstrip("/")
+        try:
+            target = (root / rel).resolve()
+        except Exception:
+            continue
+        if target == root or root in target.parents:
+            member.name = rel
+            safe_members.append(member)
+        else:
+            logger.warning(f"[comfyui-install] 跳过可疑压缩包条目：{member.name}")
+    tar.extractall(path=str(dest), members=safe_members)
+
+
+def _move_tree_contents(src: Path, dst: Path) -> None:
+    """把 src 下的内容整体搬进 dst（目录合并、同名文件覆盖）。"""
+    dst.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        target = dst / item.name
+        if target.exists():
+            if target.is_dir() and item.is_dir():
+                _move_tree_contents(item, target)
+                shutil.rmtree(item, ignore_errors=True)
+                continue
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            else:
+                try:
+                    target.unlink()
+                except Exception:
+                    pass
+        shutil.move(str(item), str(target))
+
+
+def _download_comfyui_tarball(url: str) -> None:
+    """
+    下载 ComfyUI 源码压缩包并解压到 _COMFYUI_DIR（同步阻塞，必须在子线程执行）。
+
+    - 只用标准库（urllib + tarfile），不引入新依赖
+    - 逐块下载并写日志/更新 message，避免前端进度条长时间"卡死"
+    - 双层超时：单次读超时 30 秒 + 整体上限 _TIMEOUT_SOURCE_DOWNLOAD 秒
+    - 解压后剥离压缩包顶层目录（等价于 tar --strip-components=1）
+    """
+    tmp_dir = Path(tempfile.mkdtemp(prefix="nexus-comfyui-", dir=str(_COMFYUI_DIR.parent)))
+    archive = tmp_dir / "ComfyUI.tar.gz"
+    deadline = time.monotonic() + _TIMEOUT_SOURCE_DOWNLOAD
+    last_report = 0.0
+    done = 0
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "NexusVideo/1.0"})
+        _append_install_log(f"$ 下载 {url}")
+        with urllib.request.urlopen(req, timeout=_TARBALL_READ_TIMEOUT) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            if total:
+                _append_install_log(f"[信息] 源码压缩包大小：{total / 1048576:.1f} MB")
+            with open(archive, "wb") as fh:
+                while True:
+                    if time.monotonic() > deadline:
+                        raise _InstallError(
+                            f"源码下载超时（超过 {_TIMEOUT_SOURCE_DOWNLOAD} 秒）",
+                            "下载速度太慢或网络不稳定。请检查代理/网络，或设置 "
+                            "COMFYUI_TARBALL_URL 指向国内镜像的压缩包地址后重试",
+                        )
+                    chunk = resp.read(_TARBALL_CHUNK)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done += len(chunk)
+                    now = time.monotonic()
+                    if now - last_report >= 1.0:
+                        last_report = now
+                        if total:
+                            pct = min(99, done * 100 // total)
+                            _append_install_log(
+                                f"[信息] 已下载 {done / 1048576:.1f} / "
+                                f"{total / 1048576:.1f} MB（{pct}%）"
+                            )
+                            _set_install_state(message=f"正在下载 ComfyUI 源码…{pct}%")
+                        else:
+                            _append_install_log(f"[信息] 已下载 {done / 1048576:.1f} MB")
+
+        _append_install_log(f"[信息] 下载完成（{done / 1048576:.1f} MB），正在解压…")
+        _set_install_state(message="正在解压 ComfyUI 源码…")
+        extract_root = tmp_dir / "src"
+        extract_root.mkdir(parents=True, exist_ok=True)
+        try:
+            with tarfile.open(archive, "r:gz") as tar:
+                _extract_tarball_safely(tar, extract_root)
+        except tarfile.TarError as e:
+            raise _InstallError(
+                f"源码压缩包解压失败：{e}",
+                "下载到的文件不是有效的压缩包（镜像源可能返回了错误页面）。"
+                "请清空 COMFYUI_TARBALL_URL / COMFYUI_GIT_MIRROR 回退到官方地址后重试",
+            )
+
+        # 剥离顶层目录（ComfyUI-master/…）后再整体搬进安装目录
+        entries = list(extract_root.iterdir())
+        top = entries[0] if len(entries) == 1 and entries[0].is_dir() else extract_root
+        _move_tree_contents(top, _COMFYUI_DIR)
+        _append_install_log(f"[信息] 源码已解压到 {_COMFYUI_DIR}")
+    except _InstallError:
+        raise
+    except Exception as e:
+        raise _InstallError(
+            f"源码压缩包下载失败：{e}",
+            _diagnose_install_failure(str(e), stage="clone"),
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _source_download_hint(git_available: bool, tarball_hint: str) -> str:
+    """两种方式都失败时，给小白用户的合并处置建议（不出现 exit code 等术语）。"""
+    if git_available:
+        tried = (
+            "已自动试过两种方式：① Git 克隆失败（常见原因是公司/校园网络屏蔽了 git 协议）"
+            "② 改为直接下载源码压缩包，也失败了"
+        )
+    else:
+        tried = (
+            "本机没有安装 Git，已自动改用「直接下载源码压缩包」的方式（不需要安装 Git），"
+            "但下载也失败了"
+        )
+    return (
+        f"{tried}。{tarball_hint.rstrip('。')}；"
+        "你也可以手动下载 ComfyUI 源码，解压后把文件放进安装目录，再点击安装。"
+    )
+
+
+async def _download_comfyui_source(repo: str, mirrors: dict[str, str | None]) -> str:
+    """
+    获取 ComfyUI 源码：方式 A（git clone）优先，失败自动回退方式 B（下载压缩包解压）。
+
+    为什么必须有方式 B（实测结论）：
+      大量小白用户的机器上根本没装 Git；公司/校园网还常屏蔽 git 协议——
+      实测 `git ls-remote` 在 21 秒后 Failed to connect to github.com:443，
+      而同一台机器下载 codeload 压缩包 HTTP 200、约 12MB、5~7MB/s 完全正常。
+      只支持 git clone 会让「一键拉取」在这些环境 100% 失败。
+
+    返回："git" | "tarball"（实际生效的方式，写入安装状态供排障）
+    """
+    git_available = shutil.which("git") is not None
+    # 锁定版本：默认 master，可用 COMFYUI_SOURCE_TAG 指定 tag/commit 保证可复现
+    tag = settings.comfyui_source_tag or "master"
+
+    # ---- 方式 A：git clone ----
+    if git_available:
+        try:
+            await _run_install_step(
+                ["git", "clone", "--depth", "1", "--single-branch", "-b", tag,
+                 repo, str(_COMFYUI_DIR)],
+                stage="clone",
+                timeout=_TIMEOUT_GIT_CLONE,
+                expected_seconds=_ETA_GIT_CLONE,
+            )
+            return "git"
+        except _InstallError as e:
+            _append_install_log(f"[警告] Git 克隆未成功（{e.message}），自动改用下载压缩包方式")
+        except Exception as e:
+            _append_install_log(f"[警告] Git 克隆异常（{e}），自动改用下载压缩包方式")
+        # git clone 会留下半成品目录，换方式前必须清掉
+        _cleanup_partial_source_dir()
+    else:
+        _append_install_log(
+            "[信息] 本机未安装 Git，已自动改用「直接下载源码压缩包」方式，无需安装 Git"
+        )
+
+    # ---- 方式 B：HTTP 下载压缩包并解压 ----
+    tarball_url = _resolve_tarball_url(mirrors, repo)
+    _set_install_state(message="正在下载 ComfyUI 源码压缩包…")
+    heartbeat = asyncio.create_task(_progress_heartbeat("clone", _ETA_SOURCE_DOWNLOAD))
+    try:
+        await asyncio.to_thread(_download_comfyui_tarball, tarball_url)
+    except _InstallError as e:
+        _cleanup_partial_source_dir()
+        raise _InstallError(
+            "ComfyUI 源码下载失败",
+            _source_download_hint(git_available, e.hint),
+        )
+    except Exception as e:
+        _cleanup_partial_source_dir()
+        raise _InstallError(
+            "ComfyUI 源码下载失败",
+            _source_download_hint(git_available, _diagnose_install_failure(str(e), stage="clone")),
+        )
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    return "tarball"
+
+
 def _comfyui_entry_exists() -> bool:
     """判断 ComfyUI 是否已安装（以入口文件 main.py 为准）。"""
     return (_COMFYUI_DIR / settings.comfyui_entry).exists()
@@ -1201,12 +1556,12 @@ async def _install_comfyui() -> dict:
                 f"请手动删除目录 {_COMFYUI_DIR} 后重新点击安装",
             )
 
-    # --- 前置检查：git 是否可用 ---
+    # --- 前置提示：git 是否可用（已是软性条件，不再拦截） ---
+    # 没装 Git 也能装：阶段 2 会自动回退为「下载源码压缩包并解压」。
+    # 旧版本在此直接报错拦截，导致没装 Git 的小白用户根本走不到安装流程。
     if shutil.which("git") is None:
-        return _install_error_response(
-            "未检测到 git 命令",
-            "一键安装需要 Git。请先安装 Git（https://git-scm.com/downloads），"
-            "安装时保持默认选项（自动加入 PATH），完成后重启 NexusVideo",
+        logger.info(
+            "[comfyui-install] 未检测到 git 命令，将改用下载源码压缩包方式获取 ComfyUI"
         )
 
     # --- 前置检查：磁盘空间（源码 + torch 约需 10GB） ---
@@ -1326,26 +1681,27 @@ async def _comfyui_install_worker() -> None:
             f"{'检测到 NVIDIA 显卡，将安装 CUDA 版 PyTorch' if has_gpu else '未检测到 NVIDIA 显卡，将安装 CPU 版 PyTorch'}"
         )
 
-        # ---------- 阶段 2：git clone ----------
+        # ---------- 阶段 2：获取源码（git clone，失败自动回退为下载压缩包） ----------
         _enter_stage("clone", "正在下载 ComfyUI 源码…")
         repo = mirrors["git_repo"] or _COMFYUI_REPO_DEFAULT
         if mirrors["git_repo"]:
-            _append_install_log(f"[信息] 使用 Git 镜像：{repo}")
+            _append_install_log(f"[信息] 使用源码镜像：{repo}")
         try:
             _append_install_log(f"[信息] 安装目标（绝对路径）：{_COMFYUI_DIR.resolve()}")
         except Exception:
             pass
         _COMFYUI_DIR.parent.mkdir(parents=True, exist_ok=True)
-        await _run_install_step(
-            ["git", "clone", "--depth", "1", "--single-branch", repo, str(_COMFYUI_DIR)],
-            stage="clone",
-            timeout=_TIMEOUT_GIT_CLONE,
-            expected_seconds=_ETA_GIT_CLONE,
-        )
+        source_method = await _download_comfyui_source(repo, mirrors)
+        _set_install_state(source_method=source_method)
+        _append_install_log(f"[信息] 源码获取方式：{source_method}")
+
+        # 两种方式最终都要过这一关：入口文件不存在 = 源码没拿到
         if not _comfyui_entry_exists():
             raise _InstallError(
                 f"源码下载完成但缺少入口文件 {settings.comfyui_entry}",
-                "仓库内容异常。请删除安装目录后重试，或改用官方仓库地址（清空 COMFYUI_GIT_MIRROR）",
+                "拿到的源码不完整（可能是镜像源缺文件、或下载中途被截断）。"
+                "请重新点击安装；若反复失败，请清空 COMFYUI_GIT_MIRROR 与 "
+                "COMFYUI_TARBALL_URL 回退到官方地址",
             )
 
         # ---------- 阶段 3：PyTorch（先装，避免被 CPU 版覆盖） ----------
@@ -1354,17 +1710,30 @@ async def _comfyui_install_worker() -> None:
             "正在安装 PyTorch（CUDA 加速版，约 2.5GB）…" if has_gpu
             else "正在安装 PyTorch（CPU 版）…",
         )
+        # 锁定版本：torch 与 ComfyUI 源码必须对齐。裸 `torch` 会拉到 cu124 的 2.6.0，
+        # 与 master ComfyUI（comfy-kitchen==0.2.31）不兼容、必然起不来；此处显式钉死版本。
+        torch_ver = settings.torch_version or _TORCH_VERSION_PIN
+        torchvision_ver = _TORCHVISION_VERSION_PIN
+        torchaudio_ver = _TORCHAUDIO_VERSION_PIN
         torch_cmd = [
             launch_python, "-m", "pip", "install",
             "--no-input", "--disable-pip-version-check", "--progress-bar", "off",
-            "torch", "torchvision", "torchaudio",
+            f"torch=={torch_ver}",
+            f"torchvision=={torchvision_ver}",
+            f"torchaudio=={torchaudio_ver}",
         ]
         if has_gpu:
             torch_index = mirrors["torch_index_url"] or _TORCH_CUDA_INDEX_DEFAULT
             torch_cmd += ["--index-url", torch_index]
-            _append_install_log(f"[信息] PyTorch 轮子索引：{torch_index}")
+            _append_install_log(
+                f"[信息] PyTorch 轮子索引：{torch_index}（锁定 torch=={torch_ver}, "
+                f"torchvision=={torchvision_ver}, torchaudio=={torchaudio_ver}）"
+            )
         elif mirrors["pip_index_url"]:
             torch_cmd += ["--index-url", mirrors["pip_index_url"]]
+            _append_install_log(
+                f"[信息] 无 GPU，使用默认源安装 torch=={torch_ver}（CPU 轮子）"
+            )
         await _run_install_step(
             torch_cmd,
             stage="torch",
@@ -1408,6 +1777,24 @@ async def _comfyui_install_worker() -> None:
                 "[警告] torch 已安装但 torch.cuda.is_available() 为 False，"
                 "生成将退化为 CPU（极慢）"
             )
+
+        # ---------- 关键：启动前版本兼容自检 ----------
+        # 直接 import comfy.utils（即最初崩溃的那一行）。通过 = torch 与 ComfyUI
+        # 版本兼容；不通过 = 给好人话错误 + 明确修复动作，而不是甩 exit code=1 给用户。
+        _append_install_log("[信息] 正在自检 ComfyUI 关键模块导入（torch/ComfyUI 版本兼容）…")
+        imports_ok, import_detail = await asyncio.to_thread(
+            _verify_comfy_imports, launch_python
+        )
+        if not imports_ok:
+            raise _InstallError(
+                "ComfyUI 关键模块导入失败（torch 与 ComfyUI 版本不兼容）",
+                "ComfyUI 依赖的 PyTorch 版本与源码不匹配：典型是 torch 版本过低，无法加载 "
+                "comfy-kitchen 等依赖（报错多为 list[int] 这类类型标注不兼容）。"
+                "请确认 NEXUS_TORCH_VERSION 锁定为 2.7.x，且镜像源提供对应 cu126 的 PyTorch 轮子；"
+                "若仍失败，请删除 .venv-comfyui 后重新点击「一键拉取」。"
+                f"（诊断：{import_detail[-400:] if import_detail else '无'}）",
+            )
+        _append_install_log("[信息] ComfyUI 关键模块导入自检通过，版本兼容")
 
         # ---------- 完成 ----------
         # 安装后模型目录应指向 ComfyUI 内部 models/，同步刷新模块级缓存，
@@ -1479,6 +1866,38 @@ async def _verify_torch(launch_python: str) -> tuple[str | None, bool | None]:
         _append_install_log(f"[校验] torch 探测失败：{e}")
         logger.warning(f"[comfyui-install] torch 校验失败（不阻断）：{e}")
         return None, None
+
+
+def _verify_comfy_imports(launch_python: str) -> tuple[bool, str]:
+    """
+    真正的版本兼容自检：在 ComfyUI 启动**之前**，子进程跑 `import comfy.utils`。
+
+    这正是最初崩溃的那一行（torch 2.6 下 comfy-kitchen 用 list[int] 标注
+    torch.library.custom_op 被 infer_schema 拒绝）。能过 = torch 版本与 ComfyUI
+    源码兼容；过不了 = 直接报人话，而不是把 exit code=1 甩给用户。
+
+    返回 (ok, 诊断信息)。
+    """
+    code = "import comfy.utils, comfy.model_management; print('COMFY_IMPORT_OK')"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(_COMFYUI_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+    try:
+        r = subprocess.run(
+            [launch_python, "-c", code],
+            cwd=str(_COMFYUI_DIR),
+            env=env,
+            capture_output=True,
+            timeout=_TIMEOUT_VERIFY,
+            **({"creationflags": 0x08000000} if sys.platform == "win32" else {}),
+        )
+        out = (r.stdout or b"").decode("utf-8", errors="replace")
+        err = (r.stderr or b"").decode("utf-8", errors="replace")
+        tail = (err or out).strip().splitlines()[-6:]
+        if r.returncode == 0 and "COMFY_IMPORT_OK" in out:
+            return True, "OK"
+        return False, "\n".join(tail) or f"exit={r.returncode}"
+    except Exception as e:
+        return False, str(e)
 
 
 @router.get(
@@ -1687,7 +2106,7 @@ def _get_cpu_info() -> dict[str, Any]:
             r = subprocess.run(
                 ["powershell", "-Command",
                  "(Get-CimInstance -ClassName Win32_Processor).Name"],
-                capture_output=True, timeout=5, text=True,
+                capture_output=True, timeout=5, **_TEXT_KW,
             )
             if r.returncode == 0:
                 cpu_name = r.stdout.strip().split("\n")[0].strip()
@@ -1696,7 +2115,7 @@ def _get_cpu_info() -> dict[str, Any]:
     else:
         try:
             r = subprocess.run(
-                ["lscpu"], capture_output=True, timeout=3, text=True
+                ["lscpu"], capture_output=True, timeout=3, **_TEXT_KW
             )
             for line in r.stdout.split("\n"):
                 if line.startswith("Model name"):
@@ -1731,7 +2150,7 @@ def _get_gpu_info() -> dict[str, Any]:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total,memory.free",
              "--format=csv,noheader,nounits"],
-            capture_output=True, timeout=5, text=True,
+            capture_output=True, timeout=5, **_TEXT_KW,
         )
         if result.returncode != 0:
             return {"gpu": None, "vram_total_gb": None, "vram_available_gb": None}
@@ -1774,18 +2193,13 @@ def _get_python_info() -> dict[str, Any]:
 
 
 def _get_cuda_version() -> dict[str, Any]:
-    """CUDA 版本。"""
-    try:
-        result = subprocess.run(
-            ["nvidia-smi"], capture_output=True, timeout=5, text=True
-        )
-        for line in result.stdout.split("\n"):
-            if "CUDA Version" in line:
-                ver = line.split("CUDA Version")[-1].strip().rstrip("]").strip()
-                return {"cuda_version": ver}
-    except Exception:
-        pass
-    return {"cuda_version": None}
+    """CUDA 版本。
+
+    复用 _read_nvidia_smi_text()（安全解码）+ _parse_cuda_version()（正则提取），
+    与组件检测里的 CUDA 解析保持同一套逻辑，避免两处表现不一致。
+    """
+    ver = _parse_cuda_version(_read_nvidia_smi_text())
+    return {"cuda_version": None if ver == "unknown" else ver}
 
 
 @router.get(

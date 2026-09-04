@@ -142,7 +142,58 @@ class ComfyUIProcessManager:
                 cmd.append("--medvram")
             # > 12288 不追加，保持默认全量加载
 
+        # ------------------------------------------------------------------
+        # 内存（不是显存）自适应降级
+        # ------------------------------------------------------------------
+        # 背景：本机实测踩到的硬崩溃并不在显存上，而是 Windows「提交内存」
+        # （commit charge = 物理内存 + 页面文件）不够，报：
+        #     OSError: 页面文件太小，无法完成操作。 (os error 1455)
+        #     ↑ ERROR_COMMITMENT_LIMIT，抛在 safetensors.safe_open() 里
+        # 紧接着进程以 0xC0000005（ACCESS_VIOLATION / exit code 3221225477）
+        # 整体崩掉，端口消失，前端只看到「ComfyUI 未运行」。
+        #
+        # 触发链路：
+        #   1) ComfyUI 默认开 pinned memory（日志 "Enabled pinned memory 6478.0"），
+        #      页锁定内存不可换出，直接占掉约 6.4GB 提交内存；
+        #   2) 6GB 显存机器会走 --lowvram，文本编码器被放到 CPU 上跑；
+        #   3) umt5_xxl fp8 文本编码器本体 6.7GB，safetensors 需要一次性映射；
+        #   4) 1)+3) 之和超过剩余提交内存 → 1455 → 崩溃。
+        # 实测：清理僵尸进程前剩余提交内存 5.10GB < 6.7GB，必崩；
+        #       清理后 8.63GB，才有余量。
+        #
+        # 因此：提交内存余量偏低时主动关掉 pinned memory 并改用最省内存的
+        # 缓存策略，用「慢一点」换「不崩」。阈值按最大单个模型文件
+        # （umt5_xxl fp8 = 6.7GB）留一倍安全垫，取 12GB。
+        _commit_avail_gb = self._available_commit_gb()
+        if _commit_avail_gb is not None and _commit_avail_gb < 12.0:
+            if "--disable-pinned-memory" not in cmd:
+                cmd.append("--disable-pinned-memory")
+            if not any(a.startswith("--cache-") for a in cmd):
+                cmd.append("--cache-none")
+            logger.warning(
+                f"可用提交内存仅 {_commit_avail_gb:.2f}GB（<12GB），"
+                f"已追加 --disable-pinned-memory --cache-none 防止 os error 1455 崩溃"
+            )
+
         return cmd
+
+    @staticmethod
+    def _available_commit_gb() -> float | None:
+        """
+        返回当前可用「提交内存」(GB)，失败返回 None。
+
+        Windows 上 psutil.virtual_memory().available 只反映物理内存，
+        真正会触发 os error 1455 的是提交内存上限（物理 + 页面文件），
+        所以这里用 swap + virtual 组合估算，跨平台安全降级。
+        """
+        try:
+            vm = psutil.virtual_memory()
+            sm = psutil.swap_memory()
+            # 提交余量 ≈ 物理可用 + 页面文件可用
+            return (vm.available + max(sm.total - sm.used, 0)) / (1024 ** 3)
+        except Exception as exc:  # noqa: BLE001 - 探测失败不应阻塞启动
+            logger.debug(f"提交内存探测失败，跳过内存自适应降级：{exc}")
+            return None
 
     # ================================================================
     # 等待服务就绪
@@ -199,6 +250,10 @@ class ComfyUIProcessManager:
         """
         restart_count = 0
         max_restarts = 3
+        # 判定「这次重启算稳住了」所需的连续存活时长（秒）。
+        # 必须大于 ComfyUI 加载模型的时间，否则「起来了但加载模型时崩」
+        # 会被误判成重启成功。
+        stable_after_sec = 180.0
 
         while True:
             await asyncio.sleep(settings.health_check_interval)
@@ -206,11 +261,32 @@ class ComfyUIProcessManager:
             if self._process is None:
                 continue
 
+            # 已连续存活足够久 → 认为真正稳定，才清零重启计数。
+            # 【修复】原实现在 start() 返回后立刻 restart_count = 0，
+            # 而 start() 只保证「端口起来了」，不保证「不会马上崩」。
+            # 结果崩溃循环里每轮都重置计数，日志永远停在「第 1/3 次」，
+            # 3 次上限形同虚设 —— 本机实测就是这样刷出多个僵尸实例，
+            # 每个各占约 6.4GB 页锁定内存，把提交内存吃穿，越重启越崩。
+            if (
+                restart_count > 0
+                and self._process.returncode is None
+                and self._start_time is not None
+                and (time.time() - self._start_time) >= stable_after_sec
+            ):
+                logger.info(
+                    f"ComfyUI 已连续稳定运行 {stable_after_sec:.0f}s，重启计数清零"
+                )
+                restart_count = 0
+
             if self._process.returncode is not None:
                 # 进程已退出
-                logger.error(
-                    f"ComfyUI 进程异常退出！exit code={self._process.returncode}"
-                )
+                exit_code = self._process.returncode
+                logger.error(f"ComfyUI 进程异常退出！exit code={exit_code}")
+                # 给出可读的崩溃归因，避免前端只看到一个裸数字
+                logger.error(f"崩溃归因：{self._explain_exit_code(exit_code)}")
+
+                # 回收残留句柄，避免僵尸进程继续占用端口/内存
+                await self._reap_dead_process()
 
                 if restart_count < max_restarts:
                     restart_count += 1
@@ -218,16 +294,84 @@ class ComfyUIProcessManager:
                         f"尝试自动重启 ComfyUI（第 {restart_count}/{max_restarts} 次）..."
                     )
                     try:
-                        await self.start()
-                        restart_count = 0  # 重启成功，重置计数
+                        # 【修复】auto_fallback_port=False：
+                        # 崩溃重启必须抢回原端口。原实现允许端口漂移，
+                        # 实测出现 8188→8189→8190，前端/WebSocket 仍连 8188，
+                        # 表现为「进程在跑但页面显示未运行」。
+                        await self.start(auto_fallback_port=False)
                     except Exception as e:
                         logger.error(f"自动重启失败：{e}")
+                        # 起不来就退避，避免空转刷日志
+                        await asyncio.sleep(
+                            min(30.0, settings.health_check_interval * restart_count)
+                        )
                 else:
                     logger.critical(
                         f"ComfyUI 重启次数已达上限（{max_restarts}），"
                         f"不再自动重试，请手动检查"
                     )
                     break
+
+    @staticmethod
+    def _explain_exit_code(code: int) -> str:
+        """把 ComfyUI 退出码翻译成人话，方便定位而不是只看数字。"""
+        # Windows 退出码是无符号 32 位，负数/大数都要归一化
+        u = code & 0xFFFFFFFF
+        known = {
+            0xC0000005: (
+                "0xC0000005 ACCESS_VIOLATION（段错误）。常见于内存/提交内存耗尽后"
+                "紧接着的连带崩溃，或显卡驱动与 torch 版本不匹配。"
+                "优先查日志里是否先出现 os error 1455（页面文件太小）。"
+            ),
+            0xC0000017: "0xC0000017 STATUS_NO_MEMORY（内存不足）。",
+            0xC00000FD: "0xC00000FD STACK_OVERFLOW（栈溢出）。",
+            2: "argparse 参数错误（unrecognized arguments），检查 comfyui_extra_args。",
+            1: "Python 未捕获异常退出，看日志最后的 Traceback。",
+        }
+        if u in known:
+            return known[u]
+        return f"未知退出码 {code}（0x{u:08X}），请查看上方 ComfyUI 日志。"
+
+    async def _reap_dead_process(self) -> None:
+        """
+        回收已退出进程的残留资源。
+
+        ComfyUI 崩溃（尤其 ACCESS_VIOLATION）时可能留下仍持有端口的子进程，
+        不清掉会导致下次启动端口冲突 → 端口漂移 → 前端连错端口。
+        """
+        proc = self._process
+        if proc is None:
+            return
+        try:
+            # 已退出的进程要 wait() 掉，否则句柄泄漏
+            if proc.returncode is not None:
+                await proc.wait()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"回收 ComfyUI 进程句柄失败（可忽略）：{exc}")
+
+        # 清掉可能残留、仍占着我们端口的同名进程
+        try:
+            for conn in psutil.net_connections(kind="inet"):
+                if (
+                    conn.laddr
+                    and conn.laddr.port == self._port
+                    and conn.status == psutil.CONN_LISTEN
+                    and conn.pid
+                    and conn.pid != (proc.pid if proc else None)
+                ):
+                    try:
+                        zombie = psutil.Process(conn.pid)
+                        if "python" in zombie.name().lower():
+                            logger.warning(
+                                f"清理仍占用端口 {self._port} 的残留进程 PID={conn.pid}"
+                            )
+                            zombie.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"扫描端口残留进程失败（可忽略）：{exc}")
+
+        self._process = None
 
     # ================================================================
     # 日志流转发

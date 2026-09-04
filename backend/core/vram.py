@@ -15,6 +15,12 @@ NexusVideo Backend - 显存探测工具
 import shutil
 import subprocess
 
+# 中文 Windows 兼容：nvidia-smi 输出可能含非 UTF-8 字节（GBK 中文），
+# subprocess.run(text=True) 会严格解码失败并把 stdout 置为 None，
+# 导致显存探测静默返回 None（表现为"显存未知 / 模型全部警告爆显存"）。
+# 统一用 errors="replace" 保证 stdout 一定是 str。详见 routers/settings.py 同名常量。
+_TEXT_KW = {"encoding": "utf-8", "errors": "replace"}
+
 
 def _has_nvidia_gpu() -> bool:
     """轻量判断是否存在 NVIDIA 显卡（只看 nvidia-smi 是否可执行）。"""
@@ -34,7 +40,7 @@ def _get_vram_total_mb() -> "int | None":
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total",
              "--format=csv,noheader,nounits"],
-            capture_output=True, timeout=5, text=True,
+            capture_output=True, timeout=5, **_TEXT_KW,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return None
@@ -56,7 +62,7 @@ def _get_vram_free_mb() -> "int | None":
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.free",
              "--format=csv,noheader,nounits"],
-            capture_output=True, timeout=5, text=True,
+            capture_output=True, timeout=5, **_TEXT_KW,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return None
