@@ -587,6 +587,11 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ needs.preflight.outputs.version }}"
+          # 兜底：preflight 输出为空时（异常分支）从 tauri.conf.json 直接读取，避免生成空 version / 错误 URL
+          if [[ -z "$VERSION" ]]; then
+            echo "[WARN] preflight.outputs.version 为空，从 tauri.conf.json 读取版本号"
+            VERSION=$(python3 -c "import json; print(json.load(open('client/src-tauri/tauri.conf.json'))['version'])")
+          fi
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # 计算 SHA256
@@ -601,15 +606,15 @@ jobs:
             "pub_date": "$DATE",
             "platforms": {
               "windows-x86_64": {
-                "url": "https://releases.nexusvideo.com/NexusVideo_${VERSION}_x64-setup.exe",
+                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/NexusVideo_${VERSION}_x64-setup.exe",
                 "sha256": "$WIN_SHA"
               },
               "darwin-x86_64": {
-                "url": "https://releases.nexusvideo.com/NexusVideo_${VERSION}_x64.dmg",
+                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/NexusVideo_${VERSION}_x64.dmg",
                 "sha256": "$MAC_X64_SHA"
               },
               "darwin-aarch64": {
-                "url": "https://releases.nexusvideo.com/NexusVideo_${VERSION}_aarch64.dmg",
+                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/NexusVideo_${VERSION}_aarch64.dmg",
                 "sha256": "$MAC_ARM_SHA"
               }
             },
