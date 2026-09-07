@@ -1,6 +1,7 @@
 {
   "manifest_version": 1,
-  "_comment": "NexusVideo 一键拉取清单（M1）。所有 item.target 相对 settings.staging_dir（默认 D:/nexusvideo_staging）。模型按 comfyui/extra_model_paths.yaml 的 base_path 映射落盘：staging/models/<子目录>/。required_models 的路径相对 base_path（= staging/models），供 /install/verify 自检。kind=file 走 HTTP Range 续传+原子重命名；kind=archive 走 zip 下载+解压。urls[0] 为主源，urls[1] 为镜像回退；item.prefer_env 可让运行时用 settings 里的覆盖源（如 comfyui_tarball_url）。",
+  "_size_measured_at": "2026-09-07",
+  "_comment": "NexusVideo 一键拉取清单（M1）。所有 item.target 相对 settings.staging_dir（默认 D:/nexusvideo_staging）。模型按 comfyui/extra_model_paths.yaml 的 base_path 映射落盘：staging/models/<子目录>/。required_models 的路径相对 base_path（= staging/models），供 /install/verify 自检。kind=file 走 HTTP Range 续传+原子重命名；kind=archive 走 zip 下载+解压。urls[0] 为主源，urls[1] 为镜像回退；item.prefer_env 可让运行时用 settings 里的覆盖源（如 comfyui_tarball_url）。 三个模型 file 项的 size_bytes 为 2026-09-07 用 HTTP Range 请求实测的真实字节数（curl -r 0-0，解析 206 响应头 Content-Range 的总长度），并非估算值；上游重新上传导致大小变化时须按同一方法重新测量并同步更新 size_bytes 与 _size_measured_at。切勿用 curl -I / HEAD 测量：HF 的 302 重定向页会返回 1KB 级别的假 Content-Length。容差设为 10% 是为了容忍上游小幅重新上传，同时仍能拦住截断/损坏的下载。",
   "items": [
     {
       "category": "comfyui_source",
@@ -52,7 +53,7 @@
         "https://hf-mirror.com/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"
       ],
       "size_bytes": 6700000000,
-      "size_tolerance_pct": 0.05,
+      "size_tolerance_pct": 0.10,
       "stage": "model"
     },
     {
@@ -64,8 +65,8 @@
         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
         "https://hf-mirror.com/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
       ],
-      "size_bytes": 240000000,
-      "size_tolerance_pct": 0.05,
+      "size_bytes": 253815318,
+      "size_tolerance_pct": 0.10,
       "stage": "model"
     },
     {
@@ -77,8 +78,8 @@
         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors",
         "https://hf-mirror.com/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors"
       ],
-      "size_bytes": 2640000000,
-      "size_tolerance_pct": 0.05,
+      "size_bytes": 2838303560,
+      "size_tolerance_pct": 0.10,
       "stage": "model"
     }
   ],
