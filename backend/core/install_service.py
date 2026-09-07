@@ -131,7 +131,7 @@ class InstallService:
             try:
                 await self._pull_impl(Path(target_dir), mirror, task_id)
             except Exception as e:  # 失败态广播，供前端提示"点重试继续"
-                await self._bus.publish(
+                self._bus.publish(
                     {
                         "stage": "failed",
                         "message": FAIL_TEXT,
@@ -160,7 +160,7 @@ class InstallService:
                 await self._pull_item(item, target_dir, tmp_dir, mirror)
             except Exception as e:
                 logger.error("拉取失败 item=%s: %s", item.get("name"), e)
-                await self._bus.publish(
+                self._bus.publish(
                     {
                         "stage": "failed",
                         "message": FAIL_TEXT,
@@ -177,7 +177,7 @@ class InstallService:
         # 拉完自检
         missing = await self.verify(self.model_base_path)
         if missing:
-            await self._bus.publish(
+            self._bus.publish(
                 {
                     "stage": "verify",
                     "message": "组件已就位，但部分模型自检未通过：" + ", ".join(missing),
@@ -189,7 +189,7 @@ class InstallService:
                 }
             )
         else:
-            await self._bus.publish(
+            self._bus.publish(
                 {
                     "stage": "verify",
                     "message": STAGE_TEXT["verify"],
@@ -364,7 +364,7 @@ class InstallService:
             self._bus.unsubscribe(q)
 
     async def _emit(self, stage, message, current, total, task_id=None) -> None:
-        await self._bus.publish(
+        self._bus.publish(
             {
                 "stage": stage,
                 "message": message,
