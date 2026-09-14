@@ -335,7 +335,7 @@ class InstallService:
                 # 探测即发现不支持 Range / 文件太小 → 回退单流
             except _SegmentedAborted as e:
                 # 下载中途才发现不理 Range：清掉分段中间产物后回退单流
-                logger.info("Range 分段中止（%s），回退单流续传：%s", e, final.name)
+                logger.info("Range 分段中止（{}），回退单流续传：{}", e, final.name)
                 await asyncio.to_thread(self._purge_segment_artifacts, final, tmp_dir)
             except Exception as e:
                 # 任一段最终失败：已完成段**保留**（下次重试只补差段），只报本 item
@@ -439,7 +439,7 @@ class InstallService:
             results = await asyncio.gather(
                 *[
                     self._download_one_segment(
-                        sem, urls, i, bounds[i], seg_paths[i], counters, lock
+                        sem, urls, i, bounds[i], seg_paths[i], counters, lock, total
                     )
                     for i in range(len(bounds))
                 ],
@@ -475,7 +475,7 @@ class InstallService:
         return True
 
     async def _download_one_segment(
-        self, sem, urls, index, bounds, part_path, counters, lock
+        self, sem, urls, index, bounds, part_path, counters, lock, planned_total=None
     ) -> dict:
         """单段：Semaphore 排队 → 段内 3 次指数退避 → 失败即轮换下一源。
 
@@ -490,7 +490,8 @@ class InstallService:
                 for attempt in range(SEGMENT_ATTEMPTS):
                     try:
                         added = await asyncio.to_thread(
-                            self._fetch_segment_sync, url, index, low, high, part_path
+                            self._fetch_segment_sync, url, index, low, high, part_path,
+                            planned_total,
                         )
                         with lock:
                             counters["done"] += added
@@ -531,7 +532,7 @@ class InstallService:
                             cl = resp.headers.get("Content-Length")
                             total = int(cl) if cl and cl.isdigit() else None
                         if status == 200:
-                            logger.info("源不支持 Range（200），尝试下一候选源：%s", url)
+                            logger.info("源不支持 Range（200），尝试下一候选源：{}", url)
                             continue
                         resp.raise_for_status()
                         if not _range_supported(status, cr) or not total:
@@ -543,12 +544,19 @@ class InstallService:
         return None
 
     def _fetch_segment_sync(
-        self, url: str, index: int, low: int, high: int, part_path: Path
+        self,
+        url: str,
+        index: int,
+        low: int,
+        high: int,
+        part_path: Path,
+        planned_total: int | None = None,
     ) -> int:
         """同步下载线程：把段 [low, high] 补完到 part_path，返回本次新增字节数。
 
         断点续传：段起始 offset = part 现有 size（夹到区间内）。
-        写盘 `"ab"`（续传）/ `"xb"`（首建，独占创建防并发抢写）。
+        写盘 `"ab"` 纯追加；状态与 Content-Range 回显确认可用后才开文件，
+        失败请求不留 0 字节垃圾 part。
         段满即返回——服务器多发（不精确 Range）也在此截断丢弃。
         """
         start = part_path.stat().st_size if part_path.exists() else 0
@@ -580,7 +588,35 @@ class InstallService:
                     raise IOError(
                         f"segment {index}: 期望 206，实际 HTTP {resp.status_code}"
                     )
-                # 状态确认可用后才建/开分片：失败请求不留 0 字节垃圾 part
+                # P1 护栏：206 必须回显 Content-Range，且起点==请求 offset、
+                # 总长==探测到的 total。不合规 CDN"回 206 却从 0 发"会让
+                # 全段落位错位拼出"尺寸对内容错"的静默损坏文件——宁可中止
+                # 回退单流，绝不写入可疑字节（在开文件写盘之前校验）。
+                cr = resp.headers.get("Content-Range") or ""
+                mcr = re.match(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", cr, re.I)
+                if not mcr:
+                    raise _SegmentedAborted(
+                        f"segment {index}: 206 缺少可校验的 Content-Range（{cr!r}）"
+                    )
+                if int(mcr.group(1)) != offset:
+                    raise _SegmentedAborted(
+                        f"segment {index}: Content-Range 起点回显 {mcr.group(1)} "
+                        f"≠ 请求 offset {offset}（服务器忽略 Range 从 0 发）"
+                    )
+                if int(mcr.group(2)) != high:
+                    raise _SegmentedAborted(
+                        f"segment {index}: Content-Range 终点回显 {mcr.group(2)} "
+                        f"≠ 请求 high {high}（谎报总长/无视 end 的不合规源）"
+                    )
+                if (
+                    planned_total
+                    and mcr.group(3) != "*"
+                    and int(mcr.group(3)) != planned_total
+                ):
+                    raise _SegmentedAborted(
+                        f"segment {index}: Content-Range 总长回显 {mcr.group(3)} "
+                        f"≠ 探测 total {planned_total}"
+                    )
                 with open(part_path, "ab") as f:  # 纯追加（含 0 字节新建）
                     for chunk in resp.iter_bytes(CHUNK):
                         if not chunk:
