@@ -209,34 +209,60 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 构建后端 Python 环境 (venv + backend)
-        # 调用程流深提供的脚本：scripts/build_backend_bundle.ps1
-        # 它把 venv 建在 <repo>/resources/python_env、backend 拷到 <repo>/resources/backend，
-        # 与 tauri.conf.json 的 bundle.resources（"../../resources/..."，相对 src-tauri）对应，
-        # 打包后落在 <exe_dir>/resources/ 下，满足 paths.rs 的 resource() 期望。
-        # 脚本靠 $PSScriptRoot 自解析路径，不受当前 cwd 影响。
+      - name: 构建后端 Python 环境 (portable python_env + backend)
+        # scripts/build_backend_bundle.ps1 产出「可移植解释器」到 <repo>/resources/python_env
+        # （入口 python_env/python.exe，与 paths.rs 契约一致），backend 拷到 <repo>/resources/backend。
+        # 注意：不能用 `python -m venv` —— venv 解释器运行时要靠 pyvenv.cfg 的 home= 找回
+        # CI 机器上的 base 安装目录，用户机器没有那个目录，服务必然起不来（v0.2.13 根因之一）。
+        # 脚本靠 $PSScriptRoot 自解析路径，不受当前 cwd 影响；内部 throw 会以非零码退出。
         shell: pwsh
         run: |
-          pwsh scripts/build_backend_bundle.ps1
+          ./scripts/build_backend_bundle.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::build_backend_bundle.ps1 退出码 $LASTEXITCODE"; exit $LASTEXITCODE }
 
       - name: 构建 Tauri (Windows)
         shell: bash
         run: |
+          set -euo pipefail
           echo "[INFO] 当前 commit: $(git rev-parse HEAD)"
           echo "[INFO] 当前 tag/ref: $(git describe --tags --always 2>/dev/null || echo 'no-tag')"
           echo "[INFO] tauri.conf.json version:"
           python3 -c "import json; print('  ', json.load(open('client/src-tauri/tauri.conf.json'))['version'])"
-          echo "[INFO] 验证 resources 目录存在性:"
-          ls -la resources/python_env/ 2>&1 || echo "::error::resources/python_env 不存在"
-          ls -la resources/backend/local_server.py 2>&1 || echo "::error::resources/backend/local_server.py 不存在"
-          echo "[INFO] 检查 resources/python_env/python.exe (Windows):"
-          test -f resources/python_env/Scripts/python.exe && echo "  python.exe OK" || echo "::error::python.exe 不存在"
+
+          # ---- 构建前检查：全部硬失败（v0.2.13 静默失败的教训） ----
+          # 契约来自 client/src-tauri/src/paths.rs：
+          #   resources_root() = <exe_dir>/resources
+          #   python_executable() 第一候选 = resources/python_env/python.exe（可移植解释器）
+          echo "[INFO] 验证工作区 resources 布局（paths.rs 契约）:"
+          test -d resources/python_env || { echo "::error::resources/python_env 目录不存在"; exit 1; }
+          test -f resources/python_env/python.exe || { echo "::error::resources/python_env/python.exe 不存在（可移植解释器未构建，检查 scripts/build_backend_bundle.ps1）"; exit 1; }
+          test -d resources/python_env/Lib/site-packages || { echo "::error::resources/python_env/Lib/site-packages 不存在（依赖没装进包内）"; exit 1; }
+          test -f resources/backend/local_server.py || { echo "::error::resources/backend/local_server.py 不存在"; exit 1; }
+          echo "  [OK] resources/python_env/python.exe"
+          echo "  [OK] resources/python_env/Lib/site-packages"
+          echo "  [OK] resources/backend/local_server.py"
+
+          # ---- bundle.resources 必须是 map 形式（list 形式会把 .. 变成 _up_ 目录） ----
+          python3 - <<'PY' || { echo "::error::bundle.resources 不是 map 形式或 key 不对，安装包不会落在 resources/"; exit 1; }
+          import json, sys
+          cfg = json.load(open('client/src-tauri/tauri.conf.json'))
+          res = cfg['bundle']['resources']
+          print(f"[INFO] bundle.resources 类型 = {type(res).__name__}")
+          if not isinstance(res, dict):
+              sys.exit("FAIL: list 形式会把相对路径里的 '..' 转成字面量目录 '_up_'（tauri-utils resource_relpath）")
+          need = {'resources/python_env', 'resources/backend'}
+          targets = set(res.values())
+          missing = {n for n in need if not any(t.startswith(n) for t in targets)}
+          if missing:
+              sys.exit(f"FAIL: 缺少 target 前缀 {missing}（当前 {sorted(targets)}）")
+          print(f"[OK] resources map -> {sorted(targets)}")
+          PY
 
           # 强制清理：确保不使用任何缓存的编译产物
           cd client/src-tauri
           echo "[INFO] 工作目录: $(pwd)"
           echo "[INFO] 从 src-tauri 检查 resources 路径: ../../resources/python_env"
-          test -d ../../resources/python_env && echo "  ../../resources/python_env OK" || echo "::error::../../resources/python_env 不存在"
+          test -d ../../resources/python_env || { echo "::error::../../resources/python_env 不存在"; exit 1; }
 
           cargo clean 2>&1 | tail -3
           echo "[INFO] 开始全新构建..."
@@ -255,6 +281,60 @@ jobs:
           fi
           echo "[OK] Tauri build 成功"
         timeout-minutes: 25
+
+      - name: 校验安装包内 resources 布局（硬失败闸门）
+        # v0.2.13 静默失败的唯一根因：CI 只检查「构建工作区」有没有 resources，
+        # 却没检查「打出来的 .exe 里」到底有没有。这个步骤直接解包 NSIS 安装器
+        # 列出文件清单断言，缺一个就 exit 1，绝不再放行发布。
+        shell: bash
+        run: |
+          set -uo pipefail
+          VERSION="${{ needs.preflight.outputs.version }}"
+          # 本步骤无 cd，工作目录 = repo 根；NSIS 产物在 client/src-tauri/target 下
+          # （与「生成 SHA256」「上传 Windows 产物」两步的路径保持一致）
+          EXE="client/src-tauri/target/release/bundle/nsis/NexusVideo_${VERSION}_x64-setup.exe"
+          echo "[INFO] 校验安装包: $EXE"
+          test -f "$EXE" || { echo "::error::安装包不存在：$EXE"; exit 1; }
+
+          SEVENZ="/c/Program Files/7-Zip/7z.exe"
+          test -x "$SEVENZ" || SEVENZ="/c/Program Files (x86)/7-Zip/7z.exe"
+          test -x "$SEVENZ" || { echo "::error::runner 上找不到 7z.exe，无法校验安装包内容（宁可失败也不放行）"; exit 1; }
+
+          "$SEVENZ" l -slt "$EXE" | grep -a "^Path = " | sed 's/^Path = //' > installer-files.txt
+          echo "[INFO] 安装包内条目数: $(wc -l < installer-files.txt)"
+          echo "--- 顶层目录 ---"
+          sed 's#[\\/]\{1,\}#/#g' installer-files.txt | awk -F/ '{print $1}' | sort -u | head -40
+          echo "-----------------"
+          # 归一化：反斜杠→正斜杠，统一小写比较
+          NORM=$(sed 's#\\#/#g' installer-files.txt)
+          fail=0
+          check() { # $1=描述 $2=0 表示必须不存在
+            local desc="$1" want="$2" pat="$3"
+            if [ "$want" = "1" ]; then
+              if echo "$NORM" | grep -qia "$pat"; then echo "  [OK]   $desc"; else echo "  [MISS] $desc"; fail=1; fi
+            else
+              if echo "$NORM" | grep -qia "$pat"; then echo "  [BAD]  $desc（不该出现）"; fail=1; else echo "  [OK]   $desc（未出现）"; fi
+            fi
+          }
+          echo "[INFO] 断言安装包内容（对照 paths.rs 契约：<exe_dir>/resources/…）:"
+          check "resources/python_env/python.exe"            1 "resources/python_env/python\.exe"
+          check "resources/python_env/Lib/site-packages"     1 "resources/python_env/Lib/site-packages"
+          check "resources/backend/local_server.py"          1 "resources/backend/local_server\.py"
+          check "无 _up_ 目录（list 形式 resources 的病征）"   0 "_up_"
+
+          # 兜底体检：resources/ 下一条都没有 → 直接判死
+          # 用子串匹配（7z 的 NSIS 清单可能带前导分隔符/归档根前缀，^锚定会误判 0）
+          RCOUNT=$(echo "$NORM" | grep -cia "resources/" || true)
+          echo "[INFO] resources/ 条目数: $RCOUNT"
+          if [ "${RCOUNT:-0}" -lt 10 ]; then
+            echo "::error::安装包内 resources/ 条目异常（$RCOUNT），几乎肯定没打进 venv"
+            fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::安装包 resources 布局校验失败 —— 参见上方 [MISS]/[BAD] 行"
+            exit 1
+          fi
+          echo "[OK] 安装包内 resources 布局符合 paths.rs 契约"
 
       - name: 上传构建日志 (诊断)
         if: failure()

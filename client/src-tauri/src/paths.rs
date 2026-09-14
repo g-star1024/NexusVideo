@@ -16,7 +16,16 @@
 use crate::error::{NexusError, NexusResult};
 use std::path::{Path, PathBuf};
 
-/// 资源根目录：开发期 = <repo>/resources，打包期 = <exe_dir>/resources
+/// 资源根目录：开发期 = <repo>/resources，打包期 = 安装包内的 resources/
+///
+/// 打包期待选（按优先级，取第一个真实存在的）：
+///   1) <exe_dir>/resources           —— Windows NSIS（bundle.resources target="resources/…"
+///                                       落在 $INSTDIR，与 exe 同级）；也是白皮书物理布局
+///   2) <exe_dir>/../Resources/resources
+///                                    —— macOS .app：Tauri 把 map target 拼到
+///                                       Contents/Resources/ 下
+///   3) <exe_dir>/../Resources        —— macOS .app 的扁平形态（历史/兜底）
+/// 三者都不存在时返回 1)（让错误信息指向用户最该看的那个路径）。
 pub fn resources_root() -> NexusResult<PathBuf> {
     #[cfg(debug_assertions)]
     {
@@ -30,12 +39,22 @@ pub fn resources_root() -> NexusResult<PathBuf> {
     }
     #[cfg(not(debug_assertions))]
     {
-        // 打包期：exe 同级的 resources/
         let exe = std::env::current_exe()?;
         let exe_dir = exe
             .parent()
             .ok_or_else(|| NexusError::PathResolve("无法定位 exe 目录".into()))?;
-        Ok(exe_dir.join("resources"))
+        let primary = exe_dir.join("resources");
+        let candidates = [
+            primary.clone(),
+            exe_dir.join("../Resources/resources"),
+            exe_dir.join("../Resources"),
+        ];
+        for c in candidates {
+            if c.exists() {
+                return Ok(c);
+            }
+        }
+        Ok(primary)
     }
 }
 
@@ -82,8 +101,83 @@ fn dev_backend_candidates() -> Vec<PathBuf> {
     ]
 }
 
+/// 打包资源自检（release 专用）：安装包里该有的东西在不在。
+///
+/// v0.2.13 的 P0 教训：tauri v2 的 `bundle.resources` **list 形式**会把
+/// `../../resources/python_env` 这种相对路径里的 `..` 变成字面量目录 `_up_`
+/// （`tauri-utils::resources::resource_relpath`），于是文件被打到
+/// `$INSTDIR/_up_/_up_/resources/python_env/`，装机目录根本没有 `resources/`，
+/// 而 CI 只检查构建工作区 → 全绿静默失败。
+/// 这里在启动本地服务前做一次显式自检，缺什么就在日志里写清楚。
+pub fn packaging_diagnostics() -> String {
+    let root = resources_root().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("<解析失败: {e}>"));
+    let exists = resources_root().map(|p| p.exists()).unwrap_or(false);
+    let candidates = python_candidates()
+        .iter()
+        .map(|p| format!("{} {}", p.display(), if p.exists() { "OK" } else { "MISSING" }))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let fastapi = match fastapi_entry() {
+        Ok(p) => format!("{} {}", p.display(), if p.exists() { "OK" } else { "MISSING" }),
+        Err(_) => "MISSING".to_string(),
+    };
+    format!(
+        "[paths] resources_root={root} (exists={exists})\n\
+         [paths] python_candidates={candidates}\n\
+         [paths] fastapi_entry={fastapi}"
+    )
+}
+
+/// 嵌入式 Python 解释器的候选路径（按优先级）。
+///
+/// 为什么需要多个候选：
+///   - `python_env/python.exe`：Python 嵌入式/可重定位布局（paths.rs 的原始约定，
+///     build_backend_bundle.ps1 现在会把 base 解释器 + stdlib 落到 python_env 根，
+///     这样安装包在没有装过 Python 的用户机器上也能跑）。
+///   - `python_env/Scripts/python.exe`：Windows **venv** 布局。
+///   - `python_env/bin/python3`：POSIX venv 布局。
+/// 历史缺陷（v0.2.13）：paths.rs 只认 `python_env/python.exe`，而 CI 构建的是 venv
+/// （真实路径 `python_env/Scripts/python.exe`），即便 resources 进了包也命中不了。
+fn python_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(root) = resources_root() {
+        #[cfg(target_os = "windows")]
+        {
+            out.push(root.join("python_env").join("python.exe"));
+            out.push(root.join("python_env").join("Scripts").join("python.exe"));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            out.push(root.join("python_env").join("bin").join("python3"));
+            out.push(root.join("python_env").join("python3"));
+            out.push(root.join("python_env").join("bin").join("python"));
+        }
+    }
+    // 开发期就近兜底（与 CI 构建位置一致，或历史布局）
+    for sub in python_subpaths() {
+        for c in dev_resources_candidates(sub) {
+            if c.exists() {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn python_subpaths() -> Vec<&'static str> {
+    if cfg!(target_os = "windows") {
+        vec!["python_env/python.exe", "python_env/Scripts/python.exe"]
+    } else {
+        vec!["python_env/bin/python3", "python_env/python3"]
+    }
+}
+
 /// 在 PATH 上定位系统 Python（python3 / python）。
 /// 开发期没有预建 venv 时，用系统 Python 直接拉起 FastAPI，避免 dev 强依赖打包资源。
+///
+/// 返回 Err 时的文案规范（v0.2.13 P0 之后）：
+///   - 面向用户：一句小白话术 + 错误码，不出现 Python/venv/PATH 等术语
+///   - 面向排查：完整技术细节写日志（含 resources_root 自检结果）
 fn system_python() -> NexusResult<PathBuf> {
     for name in ["python3", "python"] {
         // 用 --version 探测是否可用（Command::new 直接走 OS PATH 解析）
@@ -93,42 +187,37 @@ fn system_python() -> NexusResult<PathBuf> {
             .map(|o| o.status.success())
             .unwrap_or(false)
         {
+            log::info!("[paths] 打包资源缺失，回退使用系统 Python: {name}");
             return Ok(PathBuf::from(name));
         }
     }
+    // 技术细节进日志，用户只看文案（14003 = 本地服务环境未就绪）
+    log::error!(
+        "[paths] 未找到任何可用 Python（错误码 14003）。已尝试的打包路径：{:?}；\
+         PATH 上的 python3/python 均不可用。{}",
+        python_candidates(),
+        packaging_diagnostics()
+    );
     Err(NexusError::PathResolve(
-        "未找到系统 Python（python3 / python 均不在 PATH 中）。开发期请安装 Python，\
-         或在 client/src-tauri 下执行 `python -m venv resources/python_env` 构建本地 venv"
-            .into(),
+        "本地服务环境未就绪，请重新安装或联系客服（错误码 14003）".into(),
     ))
 }
 
-/// 嵌入式 Python 解释器路径
-///   Windows: resources/python_env/python.exe
-///   macOS:   resources/python_env/bin/python3
+/// 嵌入式 Python 解释器路径（打包期 = exe 同级 resources/python_env/…）
 ///
 /// 解析顺序（「不静默失败」）：
-///   1) 打包/构建好的 venv（release 必然命中；dev 若已建好 resources 也命中）
+///   1) 打包资源候选：python_env/python.exe（嵌入式布局）、
+///      python_env/Scripts/python.exe（Windows venv）、
+///      python_env/bin/python3（POSIX venv）—— 按序取第一个存在的
 ///   2) 开发期就近资源候选（client/src-tauri/resources、client/resources、<repo>/resources）
-///   3) 系统 PATH 上的 python3 / python（dev 不强制预建 venv 也能起后端）
+///   3) 系统 PATH 上的 python3 / python（dev 不强制预建 venv 也能起后端；
+///      打包期走到这里说明安装包缺 resources，用户侧报 14003，细节进日志）
 pub fn python_executable() -> NexusResult<PathBuf> {
-    let sub = if cfg!(target_os = "windows") {
-        "python_env/python.exe"
-    } else {
-        "python_env/bin/python3"
-    };
-
-    // 1) 标准 resource 路径
-    if let Ok(p) = resource(sub) {
-        return Ok(p);
-    }
-    // 2) 开发期就近兜底（与 CI 构建位置一致，或历史布局）
-    for c in dev_resources_candidates(sub) {
+    for c in python_candidates() {
         if c.exists() {
             return Ok(c);
         }
     }
-    // 3) 系统 Python
     system_python()
 }
 
