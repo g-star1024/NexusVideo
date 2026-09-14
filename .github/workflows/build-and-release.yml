@@ -576,7 +576,8 @@ jobs:
   generate-manifest:
     name: 生成 Update Manifest
     runs-on: ubuntu-22.04
-    needs: [build-windows, build-macos]
+    # preflight 必须在 needs 里：否则 needs.preflight.outputs.version 恒为空串
+    needs: [preflight, build-windows, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/download-artifact@v4
@@ -587,10 +588,10 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ needs.preflight.outputs.version }}"
-          # 兜底：preflight 输出为空时（异常分支）从 tauri.conf.json 直接读取，避免生成空 version / 错误 URL
+          # 兜底：preflight 输出为空时用 GITHUB_REF_NAME 去 v 前缀（本 job 无 checkout，不可依赖仓库文件）
           if [[ -z "$VERSION" ]]; then
-            echo "[WARN] preflight.outputs.version 为空，从 tauri.conf.json 读取版本号"
-            VERSION=$(python3 -c "import json; print(json.load(open('client/src-tauri/tauri.conf.json'))['version'])")
+            echo "[WARN] preflight.outputs.version 为空，从 GITHUB_REF_NAME 推导版本号"
+            VERSION="${GITHUB_REF_NAME#v}"
           fi
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
